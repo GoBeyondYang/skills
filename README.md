@@ -1,3 +1,5 @@
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 # Claude Skills
 
 AI Skills collection for Claude Code. / Claude Code 技能合集。
