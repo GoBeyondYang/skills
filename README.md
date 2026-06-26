@@ -14,8 +14,5 @@ AI Skills collection for Claude Code. / Claude Code 技能合集。
 
 ```bash
 # Install a skill / 安装技能
-claude add skill https://github.com/GoBeyondYang/skills/tree/main/skills/business-conflict-analyzer
-
-# Or via raw SKILL.md URL / 或通过 SKILL.md 直接安装
 claude add skill https://github.com/GoBeyondYang/skills/raw/main/skills/business-conflict-analyzer/SKILL.md
 ```
