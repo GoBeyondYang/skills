@@ -15,6 +15,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+_script_dir = str(Path(__file__).parent.resolve())
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
 from lang import Translator
 
 # Ensure UTF-8 stdout (handles Chinese/emoji on Windows)
