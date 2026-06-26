@@ -11,6 +11,8 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from __future__ import annotations
+
 from typing import Optional
 
 from lang import Translator

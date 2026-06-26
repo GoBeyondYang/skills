@@ -17,6 +17,8 @@ import sys
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
+from __future__ import annotations
+
 from lang import Translator
 
 @dataclass
