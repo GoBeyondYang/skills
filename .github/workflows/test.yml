@@ -1,3 +1,5 @@
+# Tests all skills in this repository.
+# Must be at repo root — GitHub only discovers workflows from .github/workflows/.
 name: Test
 
 on:
@@ -21,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # needed for git diff analysis in tests
+          fetch-depth: 0
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
