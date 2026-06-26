@@ -218,6 +218,7 @@ def generate_report(manifest: dict, matrix: dict, translator: Optional[Translato
     o_migration = matrix.get("data_migration", {})
     o_api = matrix.get("api_compatibility", {})
     o_frontend = matrix.get("frontend_affected", False)
+    o_frontend_files = matrix.get("frontend_files", [])
 
     risk_label, risk_note = t.risk_display(o_impact)
 
@@ -282,8 +283,16 @@ def generate_report(manifest: dict, matrix: dict, translator: Optional[Translato
         )
 
     if o_frontend:
+        frontend_detail = t.t("report.impact.frontend_body")
+        if o_frontend_files:
+            max_show = 20
+            shown = o_frontend_files[:max_show]
+            file_lines = "\n".join(f"   - `{f}`" for f in shown)
+            if len(o_frontend_files) > max_show:
+                file_lines += f"\n   - *...and {len(o_frontend_files) - max_show} more*"
+            frontend_detail += f"\n\n**Affected files / 受影响文件:**\n{file_lines}"
         impact_sections.append(
-            f"### {t.t('report.impact.frontend_title')}\n\n{t.t('report.impact.frontend_body')}"
+            f"### {t.t('report.impact.frontend_title')}\n\n{frontend_detail}"
         )
 
     impact_block = "\n\n".join(impact_sections) if impact_sections else t.t("report.impact.no_external")
@@ -404,6 +413,7 @@ def main():
                     "suggestion": matrix_obj.api_compatibility.suggestion,
                 },
                 "frontend_affected": matrix_obj.frontend_affected,
+                "frontend_files": matrix_obj.frontend_files,
                 "overall_impact": matrix_obj.overall_impact,
                 "recommendation": matrix_obj.recommendation,
                 "lang": t.lang_for_pipe(),

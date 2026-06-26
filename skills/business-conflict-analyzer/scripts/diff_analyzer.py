@@ -128,6 +128,15 @@ def _detail_python(added: int, removed: int) -> str:
 def _detail_typescript(added: int, removed: int) -> str:
     return f"typescript:+{added}/-{removed}"
 
+def _detail_go(added: int, removed: int) -> str:
+    return f"go:+{added}/-{removed}"
+
+def _detail_vue(added: int, removed: int) -> str:
+    return f"vue:+{added}/-{removed}"
+
+def _detail_jsp(added: int, removed: int) -> str:
+    return f"jsp:+{added}/-{removed}"
+
 def _detail_sql(count: int) -> str:
     return f"sql:{count} DDL"
 
@@ -296,10 +305,171 @@ def extract_typescript_diff(diff_text: str) -> tuple[list[str], str]:
 
     return symbols, _detail_typescript(added, removed)
 
+# Vue SFC parser
+
+_VUE_SCRIPT_RE = re.compile(r'^\s*<script\b')
+_VUE_SCRIPT_END_RE = re.compile(r'^\s*</script>')
+_VUE_TEMPLATE_RE = re.compile(r'^\s*<template\b')
+_VUE_TEMPLATE_END_RE = re.compile(r'^\s*</template>')
+
+def extract_vue_diff(diff_text: str) -> tuple[list[str], str]:
+    """Parse Vue SFC diff — <script> props/emits/state, <template> bindings."""
+    symbols = []
+    added = 0
+    removed = 0
+    in_script = False
+    in_template = False
+
+    for line in diff_text.splitlines():
+        if not line:
+            continue
+        prefix = line[0]
+        # Section tracking must check ALL lines (context + diff),
+        # but symbol extraction only from +/- lines.
+        stripped = line[1:].strip() if prefix in ("+", "-", " ") else line.strip()
+
+        if _VUE_SCRIPT_RE.match(stripped):
+            in_script, in_template = True, False
+            continue
+        if _VUE_SCRIPT_END_RE.match(stripped):
+            in_script, in_template = False, False
+            continue
+        if _VUE_TEMPLATE_RE.match(stripped):
+            in_template, in_script = True, False
+            continue
+        if _VUE_TEMPLATE_END_RE.match(stripped):
+            in_template = False
+            continue
+
+        if prefix not in ("+", "-"):
+            continue
+        is_addition = prefix == "+"
+
+        if in_script:
+            if stripped.startswith(("//", "/*", "*", "import ", "export default")):
+                continue
+
+            m = re.search(r"""defineModel\s*\(\s*['"](\w[\w-]*)['"]""", stripped)
+            if m:
+                symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(1)))
+                if is_addition: added += 1
+                else: removed += 1
+                continue
+
+            m = re.search(r"""defineEmits\s*\(\s*\[([^\]]+)\]""", stripped)
+            if m:
+                for evt in re.findall(r"""['"](\w[\w-]*)['"]""", m.group(1)):
+                    symbols.append(f"event_{'add' if is_addition else 'del'}:{evt}")
+                    if is_addition: added += 1
+                    else: removed += 1
+                continue
+
+            m = re.match(r"""^\s*['"](\w[\w-]*)['"]\s*[,)\]]""", stripped)
+            if m:
+                symbols.append(f"event_{'add' if is_addition else 'del'}:{m.group(1)}")
+                if is_addition: added += 1
+                else: removed += 1
+                continue
+
+            m = re.match(r'^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:ref|reactive|computed|shallowRef|shallowReactive)\s*\(', stripped)
+            if m:
+                symbols.append(_sym(_SYM_PADD, _SYM_PDEL, is_addition, m.group(1)))
+                if is_addition: added += 1
+                else: removed += 1
+                continue
+
+            m = re.match(r"""^\s*['"]?(\w+)['"]?\s*:\s*(?:\{|String|Number|Boolean|Array|Object|Function|Date|RegExp|Symbol)\b""", stripped)
+            if m and m.group(1) not in ('props', 'emits', 'type', 'default', 'required', 'validator', 'setup', 'data', 'methods', 'computed', 'watch', 'components', 'directives', 'filters'):
+                symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(1)))
+                if is_addition: added += 1
+                else: removed += 1
+                continue
+
+        elif in_template:
+            # :prop / v-bind:prop (consumer side)
+            for m in re.finditer(r'(?:v-bind|:)([\w-]+)\s*=', stripped):
+                symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(1)))
+                if is_addition: added += 1
+                else: removed += 1
+            # @event (consumer side)
+            for m in re.finditer(r'@([\w-]+)\s*=', stripped):
+                symbols.append(f"event_{'add' if is_addition else 'del'}:{m.group(1)}")
+                if is_addition: added += 1
+                else: removed += 1
+
+    # Dedup same prop appearing in both <script> and <template>
+    symbols = list(dict.fromkeys(symbols))
+    added = sum(1 for s in symbols if "_add:" in s)
+    removed = sum(1 for s in symbols if "_del:" in s)
+    return symbols, _detail_vue(added, removed)
+
+# JSP parser
+
+_JSP_TAGLIB_RE = re.compile(r'<%@\s*taglib\s+uri\s*=\s*["\']([^"\']+)["\']')
+_JSP_INCLUDE_RE = re.compile(r'<jsp:include\s+[^>]*page\s*=\s*["\']([^"\']+)["\']')
+_JSP_FORWARD_RE = re.compile(r'<jsp:forward\s+[^>]*page\s*=\s*["\']([^"\']+)["\']')
+_JSP_USE_BEAN_RE = re.compile(r'<jsp:useBean\s+[^>]*id\s*=\s*["\']([^"\']+)["\']')
+_JSP_GET_PROPERTY_RE = re.compile(r'<jsp:getProperty\s+[^>]*property\s*=\s*["\']([^"\']+)["\']')
+_JSP_BEAN_WRITE_RE = re.compile(r'<bean:write\s+[^>]*(?:name|property)\s*=\s*["\']([^"\']+)["\']')
+_JSP_BEAN_DEFINE_RE = re.compile(r'<bean:define\s+[^>]*name\s*=\s*["\']([^"\']+)["\']')
+_JSP_BEAN_MSG_RE = re.compile(r'<bean:message\s+[^>]*key\s*=\s*["\']([^"\']+)["\']')
+_JSP_EL_RE = re.compile(r'\$\{([^}]+)\}')
+
+def extract_jsp_diff(diff_text: str) -> tuple[list[str], str]:
+    """Parse JSP diff — taglib, includes, bean refs, EL expressions."""
+    symbols = []
+    added = 0
+    removed = 0
+
+    for line in diff_text.splitlines():
+        if not line.startswith(("+", "-")):
+            continue
+        stripped = line[1:].strip()
+        is_addition = line.startswith("+")
+
+        for m in _JSP_TAGLIB_RE.finditer(stripped):
+            symbols.append(f"taglib_{'add' if is_addition else 'del'}:{m.group(1)}")
+            if is_addition: added += 1
+            else: removed += 1
+
+        for m in list(_JSP_INCLUDE_RE.finditer(stripped)) + list(_JSP_FORWARD_RE.finditer(stripped)):
+            symbols.append(f"include_{'add' if is_addition else 'del'}:{m.group(1)}")
+            if is_addition: added += 1
+            else: removed += 1
+
+        for m in _JSP_USE_BEAN_RE.finditer(stripped):
+            symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(1)))
+            if is_addition: added += 1
+            else: removed += 1
+
+        for m in list(_JSP_BEAN_WRITE_RE.finditer(stripped)) + list(_JSP_BEAN_DEFINE_RE.finditer(stripped)):
+            symbols.append(_sym(_SYM_PADD, _SYM_PDEL, is_addition, m.group(1)))
+            if is_addition: added += 1
+            else: removed += 1
+
+        for m in _JSP_BEAN_MSG_RE.finditer(stripped):
+            symbols.append(f"config_{'add' if is_addition else 'del'}:{m.group(1)}")
+            if is_addition: added += 1
+            else: removed += 1
+
+        for m in _JSP_GET_PROPERTY_RE.finditer(stripped):
+            symbols.append(_sym(_SYM_PADD, _SYM_PDEL, is_addition, m.group(1)))
+            if is_addition: added += 1
+            else: removed += 1
+
+        for m in _JSP_EL_RE.finditer(stripped):
+            expr = m.group(1).strip()
+            if '.' in expr or re.match(r'^\w+$', expr):
+                symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, expr))
+                if is_addition: added += 1
+                else: removed += 1
+
+    return symbols, _detail_jsp(added, removed)
+
 DELETION_PREFIXES = (
     "field_del:", "method_del:", "class_del:", "annotation_del:",
     "decorator_del:", "interface_del:", "enum_del:", "config_del:",
-    "prop_del:", "file_del:",
+    "prop_del:", "file_del:", "event_del:", "taglib_del:", "include_del:",
 )
 
 def classify_risk(status: str, extension: str, symbols: list, is_breaking: bool) -> tuple[str, str]:
@@ -310,7 +480,8 @@ def classify_risk(status: str, extension: str, symbols: list, is_breaking: bool)
         return "P0", "diff.reason.breaking"
 
     p0_exts = {".java", ".kt", ".kts", ".sql", ".ddl"}
-    p1_exts = {".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go",
+    p1_exts = {".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".vue",
+               ".jsp", ".jspf", ".tag",
                ".yml", ".yaml", ".properties", ".xml", ".conf"}
 
     ext = f".{extension}"
@@ -376,7 +547,7 @@ def analyze(target: str = "HEAD", lang: str | None = None) -> DiffManifest:
         elif ext in ("ts", "tsx", "js", "jsx"):
             symbols, detail = extract_typescript_diff(diff_text)
             path_lower = filepath.lower()
-            if any(kw in path_lower for kw in ["interfaces", "types", "api", "controllers", "services"]):
+            if any(kw in path_lower for kw in ["interfaces", "types", "api", "controllers", "services", "components", "pages", "views"]):
                 is_breaking = True
             if _has_deletion(symbols):
                 is_breaking = True
@@ -388,9 +559,37 @@ def analyze(target: str = "HEAD", lang: str | None = None) -> DiffManifest:
                 is_breaking = True
 
         elif ext == "go":
-            symbols, detail = extract_typescript_diff(diff_text)
+            symbols, _ = extract_typescript_diff(diff_text)
+            # Go struct field detection (field_add/del even when type changes)
+            _GO_FIELD_RE = re.compile(r'^\s*(\w+)\s+[\w.*\[\]]+')
+            for line in diff_text.splitlines():
+                if line.startswith(("+", "-")):
+                    stripped = line[1:].strip()
+                    m = _GO_FIELD_RE.match(stripped)
+                    if m:
+                        sym = f"field_{'add' if line.startswith('+') else 'del'}:{m.group(1)}"
+                        symbols.append(sym)
+            symbols = list(dict.fromkeys(symbols))
+            go_adds = sum(1 for s in symbols if "_add:" in s)
+            go_dels = sum(1 for s in symbols if "_del:" in s)
+            detail = _detail_go(go_adds, go_dels)
             path_lower = filepath.lower()
             if any(kw in path_lower for kw in ["handler", "api", "transport", "endpoint", "delivery"]):
+                is_breaking = True
+            if _has_deletion(symbols):
+                is_breaking = True
+
+        elif ext == "vue":
+            symbols, detail = extract_vue_diff(diff_text)
+            path_lower = filepath.lower()
+            if any(kw in path_lower for kw in ["components", "pages", "views"]):
+                is_breaking = True
+            if _has_deletion(symbols):
+                is_breaking = True
+
+        elif ext in ("jsp", "jspf", "tag"):
+            symbols, detail = extract_jsp_diff(diff_text)
+            if _has_deletion(symbols):
                 is_breaking = True
 
         elif ext in ("sql", "ddl"):

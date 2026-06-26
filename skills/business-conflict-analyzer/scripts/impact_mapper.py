@@ -45,6 +45,7 @@ class ImpactMatrix:
     data_migration: DataMigration = field(default_factory=DataMigration)
     api_compatibility: ApiCompatibility = field(default_factory=ApiCompatibility)
     frontend_affected: bool = False
+    frontend_files: list = field(default_factory=list)
     overall_impact: str = "INFO"    # CRITICAL / MAJOR / MINOR / INFO
     recommendation: str = ""
     lang: str = "en"
@@ -142,6 +143,10 @@ def identify_layer(filepath: str) -> tuple[str, str]:
     for keyword, layer_key in ARCH_LAYERS.items():
         if keyword in path_lower:
             return keyword, layer_key
+    if path_lower.endswith(".vue"):
+        return ".vue", "layer.frontend_component"
+    if path_lower.endswith((".jsp", ".jspf", ".tag")):
+        return ".jsp", "layer.frontend_page"
     return "other", "layer.other"
 
 def find_references(symbol: str, exclude_file: str = "", project_root: str = ".") -> list[str]:
@@ -275,8 +280,8 @@ def match_pattern(symbols: list[str], filepath: str) -> Optional[dict]:
             return p
     return None
 
-def check_frontend_impact(symbols: list[str], filepath: str, project_root: str = ".") -> bool:
-    
+def check_frontend_impact(symbols: list[str], filepath: str, project_root: str = ".") -> list[str]:
+    """Search frontend project for symbol references. Returns list of affected files."""
     env_roots = os.environ.get("FRONTEND_ROOT", "")
     frontend_paths = [
         str(Path(project_root) / "../frontend"),
@@ -285,6 +290,7 @@ def check_frontend_impact(symbols: list[str], filepath: str, project_root: str =
     ]
     if env_roots:
         frontend_paths.extend(env_roots.split(os.pathsep))
+    all_refs = []
     for fp in frontend_paths:
         if Path(fp).exists():
             for symbol in symbols:
@@ -292,9 +298,14 @@ def check_frontend_impact(symbols: list[str], filepath: str, project_root: str =
                 if len(sym_name) < 3:
                     continue
                 refs = find_references(sym_name, project_root=fp)
-                if refs:
-                    return True
-    return False
+                all_refs.extend(refs)
+    seen = set()
+    result = []
+    for r in all_refs:
+        if r not in seen:
+            seen.add(r)
+            result.append(r)
+    return result
 
 def _extract_symbol_name(raw_sym: str) -> str:
     """Extract pure symbol name from language-agnostic symbol string.
@@ -424,8 +435,11 @@ def map_impact(manifest: dict, translator: Optional[Translator] = None) -> Impac
 
     # Frontend impact
     all_symbols = sum((ch.get("symbols", []) for ch in changes), [])
-    if all_symbols and check_frontend_impact(all_symbols, changes[0].get("file", "") if changes else ""):
-        matrix.frontend_affected = True
+    if all_symbols:
+        frontend_files = check_frontend_impact(all_symbols, changes[0].get("file", "") if changes else "")
+        if frontend_files:
+            matrix.frontend_affected = True
+            matrix.frontend_files = frontend_files
 
     # Overall impact & recommendation
     if breaking_count > 0:

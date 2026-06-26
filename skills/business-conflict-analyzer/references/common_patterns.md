@@ -304,3 +304,123 @@
 - **影响等级 / Impact Level**: MAJOR
 - **影响范围 / Scope**: All API requests
 - **修复代价 / Fix Cost**: Medium (full request chain testing required)
+
+## Vue Props 变更 / Vue Props Change
+
+- **触发特征**：defineProps props field_add field_del .vue 组件 传参
+- **Trigger**: defineProps props field_add field_del .vue component prop
+- **业务影响**：父组件传参时类型不匹配或缺少必传 prop，子组件无法正确渲染
+- **Business Impact**: Parent components pass incompatible types or miss required props; child components fail to render
+- **建议操作**：新增 prop 用可选标记（`default`），删除 prop 需扫描所有使用该组件的父组件传参
+- **Recommended Action**: Use optional props (`default`) for new props; scan all parent component usage before deleting props
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: Parent components referencing this component
+- **修复代价 / Fix Cost**: Medium (scan all callers)
+
+## Vue Emit 事件变更 / Vue Emit Change
+
+- **触发特征**：event_add event_del emit defineEmits .vue 事件
+- **Trigger**: event_add event_del emit defineEmits .vue event
+- **业务影响**：监听了旧事件的父组件收不到通知，或新事件参数不兼容导致逻辑失效
+- **Business Impact**: Parent components listening for old events miss notifications; new event payload mismatches break logic
+- **建议操作**：新增事件时确保参数兼容旧监听器，删除事件前扫描所有 `@event` 监听位置
+- **Recommended Action**: Ensure new event payloads are backward-compatible; scan all `@event` listeners before deleting events
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: Parent components listening to events
+- **修复代价 / Fix Cost**: Medium (coordinate with all listeners)
+
+## Vue v-model 绑定变更 / Vue v-model Binding Change
+
+- **触发特征**：defineModel v-model field_add field_del .vue 绑定
+- **Trigger**: defineModel v-model field_add field_del .vue binding
+- **业务影响**：父组件使用 `v-model` 双向绑定时，属性名或类型变化导致同步失败
+- **Business Impact**: Parent components using `v-model` break when the bound property name or type changes
+- **建议操作**：保留旧 prop 兼容（如 `modelValue`），废弃旧 `update:` 事件，下个版本迁移
+- **Recommended Action**: Keep old prop backward-compatible (e.g., `modelValue`), deprecate old `update:` events, migrate in next release
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: Parent components using v-model
+- **修复代价 / Fix Cost**: High (requires two releases)
+
+## Vue Provide/Inject 变更 / Vue Provide/Inject Change
+
+- **触发特征**：provide inject .vue 依赖 注入
+- **Trigger**: provide inject .vue dependency
+- **业务影响**：子孙组件通过 `inject` 获取的值变为 undefined，或类型不匹配导致运行时错误
+- **Business Impact**: Descendant components receiving `inject` get undefined or type mismatches, causing runtime errors
+- **建议操作**：新增 provide key 时使用 Symbol 避免冲突，废弃 key 前扫描所有 inject 消费方
+- **Recommended Action**: Use Symbol for new provide keys; scan all inject consumers before deprecating a key
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: Descendant component tree
+- **修复代价 / Fix Cost**: High (affects entire subtree)
+
+## React Props 类型变更 / React Props Type Change
+
+- **触发特征**：interface Props React.FC .tsx .jsx field_add field_del 类型
+- **Trigger**: interface Props React.FC .tsx .jsx field_add field_del type
+- **业务影响**：父组件 JSX 传参时报 TS 编译错误，或运行时 props 缺失导致组件异常
+- **Business Impact**: Parent components get TypeScript compile errors or runtime prop missing issues
+- **建议操作**：新增 props 用可选类型（`?`），删除 props 前扫描项目中所有 JSX 引用
+- **Recommended Action**: Use optional types (`?`) for new props; scan all JSX references before deleting props
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: Parent components using this component in JSX
+- **修复代价 / Fix Cost**: Medium (update all callers)
+
+## React Context 变更 / React Context Change
+
+- **触发特征**：createContext Provider useContext .tsx .jsx 上下文
+- **Trigger**: createContext Provider useContext .tsx .jsx context
+- **业务影响**：所有消费该 Context 的组件收到 undefined 值，或 value 结构变化导致解构失败
+- **Business Impact**: All context consumers receive undefined values, or value structure changes break destructuring
+- **建议操作**：Context value 新增字段保持向后兼容，删除字段前扫描所有 `useContext` 消费者
+- **Recommended Action**: Add new context fields backward-compatibly; scan all `useContext` consumers before removing fields
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: All context consumers in the component tree
+- **修复代价 / Fix Cost**: High (affects entire subtree)
+
+## Store State 变更 / Store State Change
+
+- **触发特征**：store state mapState mapGetters useStore defineStore vuex pinia redux
+- **Trigger**: store state mapState mapGetters useStore defineStore vuex pinia redux
+- **业务影响**：组件通过 mapState/useStore 读取的状态字段变为 undefined，getter 签名变化导致派生数据错误
+- **Business Impact**: Components reading via mapState/useStore get undefined; getter signature changes break derived data
+- **建议操作**：新增 state 字段不影响旧消费者，删除字段前扫描所有 mapState/useStore 引用，getter 分两步移除
+- **Recommended Action**: New state fields are safe; scan all mapState/useStore references before deletion; remove getters in two steps
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: All components connected to this store
+- **修复代价 / Fix Cost**: High (requires coordinated release)
+
+## JS/TS Export 变更 / JS/TS Export Change
+
+- **触发特征**：export import named default module 模块 导出
+- **Trigger**: export import named default module
+- **业务影响**：所有 `import` 该导出项的模块报编译错误或得到 undefined
+- **Business Impact**: All modules importing this export get compile errors or undefined at runtime
+- **建议操作**：保留旧导出别名（`export { newName as oldName }`），废弃后下个版本移除
+- **Recommended Action**: Export alias (`export { newName as oldName }`), deprecate and remove in next release
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: All importing modules
+- **修复代价 / Fix Cost**: Medium (alias + migration window)
+
+## JSP Taglib/Include 变更 / JSP Taglib/Include Change
+
+- **触发特征**：taglib_add taglib_del include_add include_del .jsp .tag 标签库 包含
+- **Trigger**: taglib_add taglib_del include_add include_del .jsp .jspf .tag
+- **业务影响**：引用了旧标签库或页面的 JSP 文件报 404 或标签解析失败
+- **Business Impact**: JSP files referencing old taglibs or includes get 404 or tag parsing failures
+- **建议操作**：更新 taglib URI 时保持旧 URI 兼容（容器级重定向），删除 include 前扫描所有引用该页面的 JSP
+- **Recommended Action**: Keep old taglib URIs compatible (container redirect); scan all referencing JSPs before deleting includes
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: All JSP files using the taglib or include
+- **修复代价 / Fix Cost**: Medium (coordinate page references)
+
+## JSP Bean/EL 引用变更 / JSP Bean/EL Reference Change
+
+- **触发特征**：bean:write bean:define bean:message prop_add prop_del field_add .jsp el
+- **Trigger**: bean:write bean:define bean:message prop_add prop_del field_add .jsp el
+- **业务影响**：JSP 页面渲染时 bean 属性找不到或 EL 表达式求值失败，页面显示空白或错误
+- **Business Impact**: JSP pages fail to render when bean properties are missing or EL expressions evaluate to null
+- **建议操作**：新增 bean 属性不影响旧页面，删除前扫描所有 JSP 中的 `bean:write` 和 `${}` 引用
+- **Recommended Action**: New bean properties are safe; scan all `bean:write` and `${}` references before deleting
+- **影响等级 / Impact Level**: BREAKING
+- **影响范围 / Scope**: JSP pages using the bean/expression
+- **修复代价 / Fix Cost**: Medium (scan JSP references)

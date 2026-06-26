@@ -1,8 +1,8 @@
 ---
 name: business-conflict-analyzer
 description: >
-  Analyzes business impact of API contract/field/schema changes in Java, Spring, Django, DRF, FastAPI, Flask, TypeScript, NestJS, Go, and Kotlin projects.
-  Detects breaking changes in DTOs, VOs, interfaces, ORM models, serializers, database DDL, Feign/RPC clients, message/event schemas, config properties, enums, API endpoints, response formats, validation/cache/transaction annotations, async/scheduled tasks, and component props.
+  Analyzes business impact of API contract/field/schema changes in Java/Spring, Python/Django/DRF/FastAPI/Flask, TypeScript/NestJS, Vue, React, Node.js/Express, Go, Kotlin, and JSP projects.
+  Detects breaking changes in DTOs, VOs, interfaces, ORM models, serializers, database DDL, Feign/RPC clients, message/event schemas, config properties, enums, API endpoints, response formats, validation/cache/transaction annotations, async/scheduled tasks, component props/emits, provide/inject, store state, JS/TS exports/imports, and JSP taglibs/includes.
   Also detects data migration needs and approval workflows.
   — Trigger phrases —
 
@@ -21,6 +21,10 @@ description: >
   "缓存", "缓存key", "事务", "事务注解", "去掉事务", "传播级别",
   "定时任务", "频率",
   "Feign", "RPC", "fallback", "降级",
+  "props", "emit", "组件传参", "事件绑定", "v-model", "store", "import", "export",
+  "标签库", "taglib", "include", "bean",
+  "组件props", "组件参数", "emit事件", "事件签名", "defineProps", "defineEmits",
+  ".vue", ".jsx", ".tsx", "middleware", "store", "pinia", "vuex", "context",
   "会不会影响", "会影响哪些", "要通知谁", "风险是什么", "影响范围",
   "需要升级", "要不要发版", "前端要改", "测试要改",
 
@@ -32,7 +36,11 @@ description: >
   "schema change", "interface change", "response format", "response changed", "format changed",
   "message format", "consumer", "needs update", "need to update",
   "API contract", "endpoint", "new version", "version upgrade",
-  "deprecated", "approval".
+  "deprecated", "approval",
+  "props", "emit", "component prop", "event binding", "store state", "context",
+  "import", "export", "taglib", "jsp include", "bean property",
+  "component prop", "emit", "PropType", "defineProps", ".vue", ".jsx", "middleware",
+  "context", "Redux", "Pinia", "Vuex".
 ---
 
 # Business Conflict Analyzer / 业务冲突分析 Skill

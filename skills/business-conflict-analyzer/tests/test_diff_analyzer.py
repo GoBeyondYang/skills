@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from diff_analyzer import (
     extract_java_diff, extract_sql_diff, extract_yaml_diff,
     extract_python_diff, extract_typescript_diff,
+    extract_vue_diff, extract_jsp_diff,
     classify_risk, Change, DiffManifest, analyze, run_git_diff,
 )
 
@@ -158,6 +159,85 @@ def test_extract_typescript_diff():
     print(f"  [OK] test_extract_typescript_diff: {len(symbols)} symbols")
 
 
+def test_extract_vue_diff_script_props():
+    """Vue SFC detects prop changes in <script>."""
+    diff = """+<script setup>
++  const props = defineProps({
++    userName: String,
+-    oldField: String,
++  })
++</script>"""
+    symbols, detail = extract_vue_diff(diff)
+    assert any("field_add:userName" in s for s in symbols), f"Should detect added prop: {symbols}"
+    assert any("field_del:oldField" in s for s in symbols), f"Should detect removed prop: {symbols}"
+    assert "vue:" in detail, f"Detail should contain 'vue:': {detail}"
+    print(f"  [OK] test_extract_vue_diff_script_props: {detail}")
+
+
+def test_extract_vue_diff_emits():
+    """Vue SFC detects emit event changes."""
+    diff = """+<script setup>
++  const emit = defineEmits(['updated', 'closed'])
+-  const emit = defineEmits(['deleted'])
++</script>"""
+    symbols, detail = extract_vue_diff(diff)
+    assert any("event_add" in s for s in symbols), f"Should detect event: {symbols}"
+    assert any("event_del" in s for s in symbols), f"Should detect removed event: {symbols}"
+    assert "vue:" in detail
+    print(f"  [OK] test_extract_vue_diff_emits: {len(symbols)} symbols")
+
+
+def test_extract_vue_diff_template():
+    """Vue SFC detects template :prop and @event usage."""
+    diff = """+<template>
++  <ChildComponent :title="pageTitle" @close="onClose" />
+-  <ChildComponent :oldProp="value" />
++</template>"""
+    symbols, detail = extract_vue_diff(diff)
+    assert any("field_add" in s for s in symbols), f"Should detect prop binding: {symbols}"
+    assert any("event_add" in s for s in symbols), f"Should detect event binding: {symbols}"
+    assert "vue:" in detail
+    print(f"  [OK] test_extract_vue_diff_template: {len(symbols)} symbols")
+
+
+def test_extract_vue_diff_style_only():
+    """Vue SFC with only <style> changes produces no symbols."""
+    diff = """+<style scoped>
++  .red { color: red; }
+-  .blue { color: blue; }
++</style>"""
+    symbols, detail = extract_vue_diff(diff)
+    assert symbols == [], f"Style-only changes should yield no symbols: {symbols}"
+    assert "vue:" in detail
+    print(f"  [OK] test_extract_vue_diff_style_only")
+
+
+def test_extract_jsp_diff():
+    """JSP diff detects taglib, includes, bean refs, EL."""
+    diff = """+<%@ taglib uri="http://java.sun.com/jsp/jstl/core" prefix="c" %>
++<jsp:include page="/common/header.jsp" />
+-<jsp:include page="/common/old-header.jsp" />
++<bean:write name="user" property="fullName" />
++${user.name}
+-${oldData.value}"""
+    symbols, detail = extract_jsp_diff(diff)
+    assert any("taglib_add" in s for s in symbols), f"Should detect taglib: {symbols}"
+    assert any("include_add" in s for s in symbols), f"Should detect include_add: {symbols}"
+    assert any("include_del" in s for s in symbols), f"Should detect include_del: {symbols}"
+    assert any("prop_add" in s for s in symbols), f"Should detect bean:write: {symbols}"
+    assert any("field_add" in s for s in symbols), f"Should detect EL: {symbols}"
+    assert "jsp:" in detail
+    print(f"  [OK] test_extract_jsp_diff: {len(symbols)} symbols")
+
+
+def test_extract_jsp_diff_empty():
+    """Empty JSP diff does not crash."""
+    symbols, detail = extract_jsp_diff("")
+    assert symbols == [], f"Empty diff should return empty list: {symbols}"
+    assert "jsp:" in detail
+    print(f"  [OK] test_extract_jsp_diff_empty")
+
+
 if __name__ == "__main__":
     print(f"\n{'='*50}")
     print(f"  diff_analyzer tests")
@@ -175,6 +255,12 @@ if __name__ == "__main__":
         test_classify_risk_p1_p2,
         test_analyze_empty,
         test_extract_java_diff_empty,
+        test_extract_vue_diff_script_props,
+        test_extract_vue_diff_emits,
+        test_extract_vue_diff_template,
+        test_extract_vue_diff_style_only,
+        test_extract_jsp_diff,
+        test_extract_jsp_diff_empty,
     ]
 
     passed = 0
