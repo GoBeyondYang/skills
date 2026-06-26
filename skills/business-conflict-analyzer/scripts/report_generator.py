@@ -5,14 +5,14 @@ report_generator.py (Step 3) — Generate impact report in en or zh.
 Reads impact_mapper.py JSON from stdin, writes conflict-report.md.
 """
 
+from __future__ import annotations
+
 import io
 import json
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from __future__ import annotations
-
 from typing import Optional
 
 from lang import Translator

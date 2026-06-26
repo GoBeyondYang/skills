@@ -9,6 +9,8 @@ Usage:
     python diff_analyzer.py --lang zh
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
@@ -17,7 +19,6 @@ import sys
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from __future__ import annotations
 
 from lang import Translator
 

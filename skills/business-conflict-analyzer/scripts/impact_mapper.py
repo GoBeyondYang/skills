@@ -5,6 +5,8 @@ impact_mapper.py (Step 2) — Map git diff changes to business impact.
 Reads diff_analyzer.py JSON from stdin, produces impact matrix.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -13,8 +15,6 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
-
-from __future__ import annotations
 
 from lang import Translator
 
