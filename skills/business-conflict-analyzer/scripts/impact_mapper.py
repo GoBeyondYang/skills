@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+"""
+impact_mapper.py (Step 2) — Map git diff changes to business impact.
+
+Reads diff_analyzer.py JSON from stdin, produces impact matrix.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Optional
+
+from lang import Translator
+
+@dataclass
+class ConsumerImpact:
+    file: str
+    impact: str          # BREAKING / COMPATIBLE / NONE
+    detail: str = ""
+
+@dataclass
+class DataMigration:
+    required: bool = False
+    risk: str = "LOW"    # HIGH / MEDIUM / LOW
+    detail: str = ""
+
+@dataclass
+class ApiCompatibility:
+    version_required: bool = False
+    suggestion: str = ""
+
+@dataclass
+class ImpactMatrix:
+    summary: str = ""
+    consumer_impacts: list = field(default_factory=list)
+    data_migration: DataMigration = field(default_factory=DataMigration)
+    api_compatibility: ApiCompatibility = field(default_factory=ApiCompatibility)
+    frontend_affected: bool = False
+    overall_impact: str = "INFO"    # CRITICAL / MAJOR / MINOR / INFO
+    recommendation: str = ""
+    lang: str = "en"
+
+ARCH_LAYERS = {
+    "controller": "layer.api",
+    "api": "layer.api",
+    "web": "layer.api",
+    "feign": "layer.rpc",
+    "client": "layer.rpc",
+    "dto": "layer.data",
+    "vo": "layer.data",
+    "request": "layer.data_request",
+    "response": "layer.data_response",
+    "service": "layer.business",
+    "impl": "layer.business_impl",
+    "mapper": "layer.data_access",
+    "repository": "layer.data_access",
+    "dao": "layer.data_access",
+    "enum": "layer.common",
+    "constant": "layer.common",
+    "config": "layer.config",
+    "properties": "layer.config",
+
+    "views": "layer.api",
+    "view": "layer.api",
+    "urls": "layer.api_route",
+    "routers": "layer.api_route",
+    "router": "layer.api_route",
+    "routes": "layer.api_route",
+    "serializers": "layer.data",
+    "serializer": "layer.data",
+    "schemas": "layer.data",
+    "schema": "layer.data",
+    "models": "layer.data_model",
+    "model": "layer.data_model",
+    "entities": "layer.data_model",
+    "entity": "layer.data_model",
+    "forms": "layer.data_form",
+    "middleware": "layer.middleware",
+    "pipelines": "layer.pipeline",
+    "admin": "layer.admin",
+    "apps": "layer.app_module",
+    "migrations": "layer.data_migration",
+    "alembic": "layer.data_migration",
+    "apps.py": "layer.app_config",
+
+    "components": "layer.frontend_component",
+    "hooks": "layer.frontend_logic",
+    "store": "layer.frontend_state",
+    "redux": "layer.frontend_state",
+    "vuex": "layer.frontend_state",
+    "pages": "layer.frontend_page",
+    "layouts": "layer.frontend_layout",
+    "interfaces": "layer.type_contract",
+    "interface": "layer.type_contract",
+    "types": "layer.type_contract",
+    "type": "layer.type_contract",
+    "decorators": "layer.decorator",
+    "decorator": "layer.decorator",
+    "guards": "layer.guard",
+    "pipes": "layer.pipe",
+    "filters": "layer.filter",
+    "interceptors": "layer.interceptor",
+    "resolvers": "layer.resolver",
+    "modules": "layer.module",
+    "module": "layer.module",
+    "providers": "layer.provider",
+    "nest": "layer.nest",
+
+    "handler": "layer.handler",
+    "handlers": "layer.handler",
+    "transport": "layer.transport",
+    "delivery": "layer.delivery",
+    "endpoint": "layer.endpoint",
+    "usecase": "layer.usecase",
+    "usecases": "layer.usecase",
+    "struct": "layer.struct",
+    "structs": "layer.struct",
+
+    "ktor": "layer.ktor",
+    "coroutines": "layer.concurrent",
+
+    "tests": "layer.test",
+    "test": "layer.test",
+    "specs": "layer.test",
+    "__test__": "layer.test",
+    "docs": "layer.doc",
+    "doc": "layer.doc",
+}
+
+def identify_layer(filepath: str) -> tuple[str, str]:
+    
+    path_lower = filepath.lower().replace("\\", "/")
+    for keyword, layer_key in ARCH_LAYERS.items():
+        if keyword in path_lower:
+            return keyword, layer_key
+    return "other", "layer.other"
+
+def find_references(symbol: str, exclude_file: str = "", project_root: str = ".") -> list[str]:
+    
+    refs = []
+    try:
+        esc = re.escape(symbol)
+        patterns = [rf'\b{esc}\b']
+        if symbol and symbol[0].islower():
+            cap = symbol[0].upper() + symbol[1:]
+            patterns.extend([
+                rf'\bget{cap}\b',
+                rf'\bset{cap}\b',
+                rf'\.{esc}\b',
+            ])
+        regex = '|'.join(patterns)
+        result = subprocess.run(
+            ["grep", "-r", "-E",
+             "--include=*.java", "--include=*.kt", "--include=*.kts",
+             "--include=*.ts", "--include=*.tsx", "--include=*.vue",
+             "--include=*.js", "--include=*.jsx",
+             "--include=*.py", "--include=*.pyi", "--include=*.go",
+             "--exclude-dir=.git", "--exclude-dir=node_modules",
+             "--exclude-dir=target", "--exclude-dir=build",
+             "-l", regex, project_root],
+            capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace"
+        )
+        for path in result.stdout.strip().splitlines():
+            path = path.strip()
+            if path and exclude_file not in path:
+                refs.append(path)
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        pass
+    return refs
+
+def find_historical_relations(symbol: str, project_root: str = ".") -> list[str]:
+    
+    refs = set()
+    try:
+        raw = subprocess.run(
+            ["git", "log", "-S", symbol, "--since=6.months.ago",
+             "--format=%H", "--max-count=10"],
+            capture_output=True, text=True, timeout=30, cwd=project_root,
+            encoding="utf-8", errors="replace"
+        )
+        commits = raw.stdout.strip().splitlines()
+        for commit in commits[:5]:
+            diff = subprocess.run(
+                ["git", "diff-tree", "--no-commit-id", "-r", "--name-only", commit],
+                capture_output=True, text=True, timeout=10, cwd=project_root,
+                encoding="utf-8", errors="replace"
+            )
+            for path in diff.stdout.strip().splitlines():
+                p = path.strip()
+                if p and not any(ign in p for ign in
+                                 [".git", "node_modules", "target", "build"]):
+                    refs.add(p)
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return list(refs)
+
+COMMON_PATTERNS_CACHE = None
+
+def load_common_patterns(pattern_path: str = "references/common_patterns.md") -> list[dict]:
+    
+    global COMMON_PATTERNS_CACHE
+    if COMMON_PATTERNS_CACHE is not None:
+        return COMMON_PATTERNS_CACHE
+
+    patterns = []
+    p = Path(pattern_path)
+    if not p.exists():
+        return patterns
+
+    content = p.read_text(encoding="utf-8")
+    current = None
+    for line in content.splitlines():
+        if line.startswith("## "):
+            if current:
+                patterns.append(current)
+            current = {"name": line[3:].strip(), "trigger": "", "impact": "",
+                       "action": "", "scope": "", "cost": ""}
+        elif current:
+            # Strip list marker
+            text = line.lstrip("- ").strip() if line.startswith("- ") else line
+            if text.startswith("**触发"):
+                current["trigger"] = _extract_pattern_value(text)
+            elif text.startswith("**影响范围"):
+                current["scope"] = _extract_pattern_value(text)
+            elif text.startswith("**影响等级"):
+                current["impact_level_line"] = _extract_pattern_value(text)
+                current["impact_level"] = "MAJOR"
+                if "BREAKING" in text:
+                    current["impact_level"] = "BREAKING"
+                elif "COMPATIBLE" in text:
+                    current["impact_level"] = "COMPATIBLE"
+            elif text.startswith("**影响"):
+                current["impact"] = _extract_pattern_value(text)
+            elif text.startswith("**建议"):
+                current["action"] = _extract_pattern_value(text)
+            elif text.startswith("**修复代价"):
+                current["cost"] = _extract_pattern_value(text)
+    if current:
+        patterns.append(current)
+
+    COMMON_PATTERNS_CACHE = patterns
+    return patterns
+
+def _extract_pattern_value(text: str) -> str:
+    """Extract value after bold label in pattern lines.
+
+    Handles both:
+      **影响范围**：...  (old Chinese format)
+      **影响范围 / Scope**: ...  (bilingual format)
+    """
+    # Split on **： or **: and take the rest
+    for sep in ("**：", "**:"):
+        if sep in text:
+            return text.split(sep, 1)[-1].strip()
+    return ""
+
+def match_pattern(symbols: list[str], filepath: str) -> Optional[dict]:
+    
+    patterns = load_common_patterns()
+    text = " ".join(symbols) + " " + filepath.lower()
+    for p in patterns:
+        trigger_keywords = p.get("trigger", "")
+        hit_count = sum(1 for kw in trigger_keywords.split() if len(kw) > 2 and kw in text)
+        if hit_count >= 2:
+            return p
+    return None
+
+def check_frontend_impact(symbols: list[str], filepath: str, project_root: str = ".") -> bool:
+    
+    env_roots = os.environ.get("FRONTEND_ROOT", "")
+    frontend_paths = [
+        str(Path(project_root) / "../frontend"),
+        str(Path(project_root) / "../web"),
+        str(Path(project_root) / "../../frontend"),
+    ]
+    if env_roots:
+        frontend_paths.extend(env_roots.split(os.pathsep))
+    for fp in frontend_paths:
+        if Path(fp).exists():
+            for symbol in symbols:
+                sym_name = symbol.split(":")[-1].strip() if ":" in symbol else symbol
+                if len(sym_name) < 3:
+                    continue
+                refs = find_references(sym_name, project_root=fp)
+                if refs:
+                    return True
+    return False
+
+def _extract_symbol_name(raw_sym: str) -> str:
+    """Extract pure symbol name from language-agnostic symbol string.
+
+    Examples:
+      "field_del:mobile"        → "mobile"
+      "field_add:phone"         → "phone"
+      "class_del:UserDTO"       → "UserDTO"
+      "annotation_add:@NotNull" → "@NotNull"
+    """
+    name = raw_sym.split(":", 1)[-1].strip() if ":" in raw_sym else raw_sym
+    # Clean trailing braces/semicolons from any remaining code snippets
+    if re.search(r'[{;]\s*$', name) or (" " in name and len(name) > 30):
+        m = re.search(r'(\w+)\s*[;,\)]\s*\}?\s*$', name)
+        if m:
+            name = m.group(1)
+    return name
+
+DELETION_PREFIXES = (
+    "field_del:", "method_del:", "class_del:", "annotation_del:",
+    "decorator_del:", "interface_del:", "enum_del:", "config_del:",
+    "prop_del:", "file_del:",
+)
+
+def map_impact(manifest: dict, translator: Optional[Translator] = None) -> ImpactMatrix:
+    """Map diff manifest to business impact matrix.
+
+    Args:
+        manifest: Diff manifest dict (from diff_analyzer JSON).
+        translator: Optional Translator; defaults to English.
+    """
+    t = translator or Translator("en")
+    matrix = ImpactMatrix(lang=t.lang_for_pipe())
+    matrix.summary = manifest.get("summary", "")
+    changes = manifest.get("changes", [])
+    breaking_count = 0
+    major_count = 0
+
+    for ch in changes:
+        filepath = ch.get("file", "")
+        ext = ch.get("extension", "")
+        symbols = ch.get("symbols", [])
+        risk_level = ch.get("risk_level", "P2")
+        status = ch.get("type", "")
+
+        layer_keyword, layer_key = identify_layer(filepath)
+        layer_display = t.t(layer_key)
+
+        # Determine impact level
+        matched = match_pattern(symbols, filepath)
+        if matched:
+            impact_level = matched.get("impact_level", "BREAKING")
+        elif risk_level == "P0":
+            impact_level = "BREAKING"
+        elif risk_level == "P1":
+            impact_level = "MAJOR"
+        else:
+            impact_level = "COMPATIBLE"
+
+        if impact_level == "BREAKING":
+            breaking_count += 1
+        elif impact_level == "MAJOR":
+            major_count += 1
+
+        # Reference search (P0/P1 only, skip added files)
+        refs = []
+        hist_refs = set()
+        if risk_level in ("P0", "P1") and status != "A":
+            for sym in symbols:
+                sym_name = _extract_symbol_name(sym)
+                if len(sym_name) > 2 and not sym_name.startswith(("@", "//", "/*")):
+                    found = find_references(sym_name, exclude_file=filepath)
+                    refs.extend(found)
+                    if risk_level == "P0" and found:
+                        hist = find_historical_relations(sym_name)
+                        hist_refs.update(hist)
+
+        # Build translated detail
+        detail_parts = [layer_display]
+        orig_details = ch.get("details", "")
+        if orig_details:
+            detail_parts.append(orig_details)
+        if refs:
+            detail_parts.append(t.t("impact.refs_found", count=len(refs)))
+        if hist_refs:
+            hist_list = ", ".join(sorted(hist_refs)[:5])
+            detail_parts.append(t.t("impact.git_history", files=hist_list))
+        if symbols:
+            display_symbols = []
+            for s in symbols[:3]:
+                translated = t.translate_symbol(s)
+                display_symbols.append(translated)
+            detail_parts.append(f"{'; '.join(display_symbols)}")
+        if matched:
+            detail_parts.append(t.t("impact.matched_pattern", name=matched.get("name", "")))
+            if matched.get("scope"):
+                detail_parts.append(t.t("impact.pattern_scope", scope=matched["scope"]))
+            if matched.get("cost"):
+                detail_parts.append(t.t("impact.pattern_cost", cost=matched["cost"]))
+
+        detail = " | ".join(detail_parts) if detail_parts else f"{filepath}"
+
+        matrix.consumer_impacts.append(ConsumerImpact(
+            file=filepath,
+            impact=impact_level,
+            detail=detail
+        ))
+
+    # Data migration
+    if manifest.get("risk_level") == "P0" and any(
+        ch.get("extension") in ("sql", "ddl") for ch in changes
+    ):
+        matrix.data_migration = DataMigration(
+            required=True,
+            risk="HIGH",
+            detail=t.t("impact.data_migration.detail")
+        )
+
+    # API compatibility
+    api_impacts = [c for c in matrix.consumer_impacts if c.impact == "BREAKING" and
+                   any(kw in c.file.lower() for kw in ["controller", "feign", "api", "dto", "sql", "ddl", "db"])]
+    if api_impacts:
+        matrix.api_compatibility = ApiCompatibility(
+            version_required=True,
+            suggestion=t.t("impact.api_compatibility.suggestion")
+        )
+
+    # Frontend impact
+    all_symbols = sum((ch.get("symbols", []) for ch in changes), [])
+    if all_symbols and check_frontend_impact(all_symbols, changes[0].get("file", "") if changes else ""):
+        matrix.frontend_affected = True
+
+    # Overall impact & recommendation
+    if breaking_count > 0:
+        matrix.overall_impact = "CRITICAL"
+        matrix.recommendation = t.t("impact.recommend.critical")
+    elif major_count > 0:
+        matrix.overall_impact = "MAJOR"
+        matrix.recommendation = t.t("impact.recommend.major")
+    else:
+        matrix.overall_impact = "MINOR"
+        matrix.recommendation = t.t("impact.recommend.minor")
+
+    return matrix
+
+def main():
+    raw = sys.stdin.read()
+    if not raw:
+        t = Translator()
+        print(t.t("error.pipe_required"), file=sys.stderr)
+        print(t.t("error.usage_diff"), file=sys.stderr)
+        sys.exit(1)
+
+    data = json.loads(raw)
+
+    # Detect language from pipe JSON, CLI, env, or default
+    pipe_lang = data.get("lang") if isinstance(data, dict) else None
+    t = Translator(pipe_lang)
+
+    # Parse CLI --lang if provided (overrides pipe)
+    if "--lang" in sys.argv:
+        try:
+            idx = sys.argv.index("--lang")
+            if idx + 1 < len(sys.argv) and sys.argv[idx + 1] in ("en", "zh"):
+                t = Translator(sys.argv[idx + 1])
+        except (ValueError, IndexError):
+            pass
+
+    matrix = map_impact(data, t)
+
+    print("=" * 50, file=sys.stderr)
+    print(t.t("impact.stderr.analysis_done"), file=sys.stderr)
+    print(t.t("impact.stderr.overall_level", level=matrix.overall_impact), file=sys.stderr)
+    print(t.t("impact.stderr.breaking_count",
+              count=sum(1 for c in matrix.consumer_impacts if c.impact == "BREAKING")), file=sys.stderr)
+    if matrix.data_migration.required:
+        print(t.t("impact.stderr.data_migration_needed", risk=matrix.data_migration.risk), file=sys.stderr)
+    if matrix.api_compatibility.version_required:
+        print(t.t("impact.stderr.api_version_needed"), file=sys.stderr)
+    if matrix.frontend_affected:
+        print(t.t("impact.stderr.frontend_affected"), file=sys.stderr)
+    print("=" * 50, file=sys.stderr)
+    print(file=sys.stderr)
+
+    result = asdict(matrix)
+    result["consumer_impacts"] = [asdict(c) for c in matrix.consumer_impacts]
+    result["data_migration"] = asdict(matrix.data_migration)
+    result["api_compatibility"] = asdict(matrix.api_compatibility)
+    result["lang"] = t.lang_for_pipe()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+if __name__ == "__main__":
+    main()
