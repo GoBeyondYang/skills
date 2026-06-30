@@ -20,7 +20,7 @@ if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 from lang import Translator
 
-# Ensure UTF-8 stdout (handles Chinese/emoji on Windows)
+# Force UTF-8 on stdout so Chinese/emoji render correctly on Windows
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 MERMAID_COLORS = {
@@ -38,7 +38,7 @@ LAYER_RANK_KEYWORDS = [
 ]
 
 def _domain_key(filename: str) -> str:
-    
+    """Derive a domain key from the file stem (e.g. 'UserController' → 'user')."""
     stem = Path(filename).stem
     for suffix in ["Controller", "Service", "DTO", "VO", "Feign",
                    "Mapper", "Repository", "Client", "Request", "Response"]:
@@ -47,7 +47,7 @@ def _domain_key(filename: str) -> str:
     return stem.lower()
 
 def _layer_rank(path: str) -> int:
-    
+    """Assign a layer rank (0-5) for Mermaid graph ordering based on path keywords."""
     lower = path.lower().replace("\\", "/")
     for rank, kws in LAYER_RANK_KEYWORDS:
         if any(kw in lower for kw in kws):
@@ -55,20 +55,24 @@ def _layer_rank(path: str) -> int:
     return 5
 
 def _short_name(path: str) -> str:
-    
+    """Return the file stem (filename without extension)."""
     return Path(path).stem
 
 def _extract_refs_from_detail(detail: str) -> list[str]:
-    
-    m = re.search(r"(\d+)\s+location", detail)
-    if not m:
-        m = re.search(r"(\d+)\s+处", detail)
-    if m:
-        return [f"refs:{m.group(1)}"]
+    """Parse reference count strings like '3 location(s)' or '3 处引用' from detail."""
+    # Multi-pattern fallback chain: tries each lang/regex variant.
+    patterns = [
+        r"(\d+)\s+location",        # EN: "3 location(s)"
+        r"(\d+)\s+处",               # ZH: "3 处引用"
+    ]
+    for pat in patterns:
+        m = re.search(pat, detail)
+        if m:
+            return [f"refs:{m.group(1)}"]
     return []
 
 def _extract_hist_from_detail(detail: str) -> list[str]:
-    
+    """Parse historical co-change file references from impact detail."""
     # English: "Historically changed together: file1, file2, file3"
     m = re.search(r"together:\s*(.+?)(?: \||$)", detail)
     if m:
@@ -96,7 +100,10 @@ def generate_dependency_graph(manifest: dict, matrix: dict, t: Translator) -> st
         color = MERMAID_COLORS.get(risk, "#888")
         ico = {"P0": "🔴", "P1": "🟡", "P2": "🟢"}.get(risk, "⚪")
         label = f"{ico} {short}<br/><small>{risk}</small>"
-        node_id = short.replace("-", "_").replace(".", "_")
+        # Use a content-hash of the full path to avoid collisions when
+        # two changed files share the same stem (e.g. dto/Order.java vs api/Order.java)
+        _safe_id = re.sub(r'\W', '_', path)
+        node_id = _safe_id.strip("_") if len(_safe_id) > 8 else f"n{abs(hash(path)) % 10**8}"
         node_defs[path] = (node_id, label, color, risk)
         domain = _domain_key(path)
         seen_domains.setdefault(domain, []).append(path)
@@ -111,7 +118,11 @@ def generate_dependency_graph(manifest: dict, matrix: dict, t: Translator) -> st
             if r not in ref_nodes:
                 rid = f"ref_{len(ref_nodes)}"
                 ref_nodes[r] = rid
-                label = r if r.startswith("refs:") else f"📄 {r}"
+                if r.startswith("refs:"):
+                    count = r.split(":", 1)[1]
+                    label = t.t("report.graph.ref_prefix", count=count)
+                else:
+                    label = f"📄 {r}"
                 node_defs[rid] = (rid, label, "#e8e8e8", "ref")
 
     # 3. Data migration node
@@ -145,9 +156,10 @@ def generate_dependency_graph(manifest: dict, matrix: dict, t: Translator) -> st
         for r in refs + hist:
             if r in ref_nodes:
                 dst_id = ref_nodes[r]
+                # Index of this new edge = len(edges) before appending the dash edge
+                edge_idx = len(edges)
                 edges.append(f"    {src_id} -.-> {dst_id}")
-                dash_count = len([e for e in edges if "-.->" in e])
-                edges.append(f"    linkStyle {dash_count - 1} stroke:#888,stroke-dasharray:4")
+                edges.append(f"    linkStyle {edge_idx} stroke:#888,stroke-dasharray:4")
 
     # 6. DDL → Data migration edge
     if migration.get("required"):
@@ -157,14 +169,14 @@ def generate_dependency_graph(manifest: dict, matrix: dict, t: Translator) -> st
                 edges.append(f"    {src_id} ==> {mid}")
                 break
 
-    # Sort nodes by layer rank
+    # Sort nodes by layer rank — use original _key (filepath), not sanitised nid
     def _node_sort_key(item):
         _key, (nid, label, color, risk) = item
         if risk == "ref":
             return (10, nid)
         if risk == "migrate":
             return (20, nid)
-        return (_layer_rank(nid if isinstance(nid, str) else ""), 0)
+        return (_layer_rank(str(_key) if _key else ""), 0)
 
     sorted_nodes = sorted(node_defs.items(), key=_node_sort_key)
 
@@ -188,15 +200,15 @@ def generate_dependency_graph(manifest: dict, matrix: dict, t: Translator) -> st
     return "\n".join(lines)
 
 def _type_icon(change_type: str) -> str:
+    """Map change type letter (A/M/D/R/C/T) to a coloured-circle emoji."""
     return {
         "A": "\U0001f7e2 ",
         "M": "\U0001f7e1 ",
         "D": "\U0001f534 ",
         "R": "\U0001f504 ",
+        "C": "\U0001f7e2 ",
+        "T": "\U0001f4dd ",
     }.get(change_type, "⚪ ")
-
-def _risk_icon(risk: str) -> str:
-    return {"P0": "P0", "P1": "P1", "P2": "P2"}.get(risk, "")
 
 def generate_report(manifest: dict, matrix: dict, translator: Optional[Translator] = None) -> str:
     """Assemble a complete bilingual business impact report.
@@ -225,18 +237,30 @@ def generate_report(manifest: dict, matrix: dict, translator: Optional[Translato
     change_rows = []
     for ch in m_changes:
         filepath = ch.get("file", "")
-        ext = ch.get("extension", "")
         symbols = ch.get("symbols", [])
         details = ch.get("details", "")
         risk = ch.get("risk_level", "P2")
-        r_icon = _risk_icon(risk)
+        r_icon = risk
         t_icon = _type_icon(ch.get("type", ""))
 
         # Translate detail
         biz_detail = t.tech_to_business(details)
+        # Append risk reason (translated i18n key).
+        # Pass ext kwarg to fill {ext} placeholder in diff.reason.file_change template.
+        reason_key = ch.get("reason", "")
+        if reason_key:
+            ext = ch.get("extension", "")
+            reason_text = t.t(reason_key, ext=ext)  # safe — extra kwargs ignored by format()
+            if t.lang == "zh":
+                biz_detail += f"（{reason_text}）"
+            else:
+                biz_detail += f" ({reason_text})"
         if symbols:
             biz_symbols = [t.translate_symbol(s) for s in symbols[:3]]
-            biz_detail += f"（{'；'.join(biz_symbols)}）"
+            if t.lang == "zh":
+                biz_detail += f"（{'；'.join(biz_symbols)}）"
+            else:
+                biz_detail += f" ({'; '.join(biz_symbols)})"
 
         # Scope column: use tech_to_business on the file path / layer info
         scope = t.tech_to_business(filepath)
@@ -289,8 +313,8 @@ def generate_report(manifest: dict, matrix: dict, translator: Optional[Translato
             shown = o_frontend_files[:max_show]
             file_lines = "\n".join(f"   - `{f}`" for f in shown)
             if len(o_frontend_files) > max_show:
-                file_lines += f"\n   - *...and {len(o_frontend_files) - max_show} more*"
-            frontend_detail += f"\n\n**Affected files / 受影响文件:**\n{file_lines}"
+                file_lines += f"\n   - *{t.t('report.impact.frontend_and_more', count=len(o_frontend_files) - max_show)}*"
+            frontend_detail += f"\n\n{t.t('report.impact.frontend_list_header')}\n{file_lines}"
         impact_sections.append(
             f"### {t.t('report.impact.frontend_title')}\n\n{frontend_detail}"
         )

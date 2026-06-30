@@ -13,6 +13,7 @@ from diff_analyzer import (
     extract_java_diff, extract_sql_diff, extract_yaml_diff,
     extract_python_diff, extract_typescript_diff,
     extract_vue_diff, extract_jsp_diff,
+    extract_go_diff, extract_properties_diff, extract_xml_diff,
     classify_risk, Change, DiffManifest, analyze, run_git_diff,
 )
 
@@ -29,6 +30,34 @@ def test_extract_java_diff_field_add_remove():
     assert any("field_del" in s for s in symbols), f"Should detect field_del: {symbols}"
     assert "java:" in detail, f"Detail should contain 'java:': {detail}"
     print(f"  [OK] test_extract_java_diff_field_add_remove: {detail}")
+
+
+def test_extract_java_diff_feign_interface_method():
+    """Feign/interface method without 'public' modifier is detected (regression)."""
+    diff = """+    Result<ActDemandDetailVo> getDemandDetail(@RequestParam String id);
+-    Result<ActDemandDetailVo> getDemandDetail(@RequestParam Long id);
++    @PostMapping("/batch")
++    List<UserDTO> batchQuery(@RequestBody List<Long> ids);
+-    List<UserDTO> batchQuery(@RequestBody List<String> ids);"""
+    symbols, detail = extract_java_diff(diff)
+    assert any("method_add" in s for s in symbols), \
+        f"Should detect method addition: {symbols}"
+    assert any("method_del" in s for s in symbols), \
+        f"Should detect method removal: {symbols}"
+    # Standalone annotations (own line) are detected; inline @RequestBody inside
+    # method signature is not caught by ANNOTATION_PATTERN (doesn't start line).
+    # This is existing behavior, not a regression.
+    assert any("annotation_add" in s for s in symbols), \
+        f"Should detect standalone annotation addition: {symbols}"
+    assert "java:" in detail, f"Detail should contain 'java:': {detail}"
+    # Should have >0 added AND >0 removed
+    import re as _re
+    m = _re.search(r'\+(\d+)/-(\d+)', detail)
+    assert m, f"Detail should match +N/-M pattern: {detail}"
+    adds, rems = int(m.group(1)), int(m.group(2))
+    assert adds > 0, f"Should detect added items, got +{adds}/-{rems}"
+    assert rems > 0, f"Should detect removed items, got +{adds}/-{rems}"
+    print(f"  [OK] test_extract_java_diff_feign_interface_method: {detail}")
 
 
 def test_extract_java_diff_annotation():
@@ -238,6 +267,48 @@ def test_extract_jsp_diff_empty():
     print(f"  [OK] test_extract_jsp_diff_empty")
 
 
+def test_extract_go_diff():
+    """Go diff detects struct fields and function changes."""
+    diff = """+type User struct {
++    ID   int64  `json:"id"`
++    Name string `json:"name"`
+-    Phone string `json:"phone"`
++    Mobile string `json:"mobile"`
++}
++func GetUser(id int64) (*User, error) {
++    return nil, nil
++}"""
+    symbols, detail = extract_go_diff(diff)
+    assert any("field_del" in s for s in symbols), f"Should detect field removal: {symbols}"
+    assert any("field_add" in s for s in symbols), f"Should detect field addition: {symbols}"
+    assert any("method_add" in s for s in symbols), f"Should detect func: {symbols}"
+    assert "go:" in detail, f"Detail should contain 'go:': {detail}"
+    print(f"  [OK] test_extract_go_diff: {len(symbols)} symbols")
+
+
+def test_extract_properties_diff():
+    """Properties diff detects config key changes."""
+    diff = """+order.timeout=500
+-order.retry=3
++payment.max.amount=20000
+-debug=true"""
+    symbols, detail = extract_properties_diff(diff)
+    assert any("config_add" in s for s in symbols), f"Should detect config_add: {symbols}"
+    assert any("config_del" in s for s in symbols), f"Should detect config_del: {symbols}"
+    assert "config:" in detail, f"Detail should mention config: {detail}"
+    print(f"  [OK] test_extract_properties_diff: {len(symbols)} items")
+
+
+def test_extract_xml_diff():
+    """XML diff does not crash and returns line counts."""
+    diff = """+<bean id="userDao" class="..."/>
+-<bean id="oldDao" class="..."/>"""
+    symbols, detail = extract_xml_diff(diff)
+    assert symbols == [], f"XML should return empty symbols: {symbols}"
+    assert "xml:" in detail, f"Detail should contain 'xml:': {detail}"
+    print(f"  [OK] test_extract_xml_diff: {detail}")
+
+
 if __name__ == "__main__":
     print(f"\n{'='*50}")
     print(f"  diff_analyzer tests")
@@ -245,6 +316,7 @@ if __name__ == "__main__":
 
     tests = [
         test_extract_java_diff_field_add_remove,
+        test_extract_java_diff_feign_interface_method,
         test_extract_java_diff_annotation,
         test_extract_java_diff_ignores_import_package,
         test_extract_sql_ddl,
@@ -261,6 +333,9 @@ if __name__ == "__main__":
         test_extract_vue_diff_style_only,
         test_extract_jsp_diff,
         test_extract_jsp_diff_empty,
+        test_extract_go_diff,
+        test_extract_properties_diff,
+        test_extract_xml_diff,
     ]
 
     passed = 0

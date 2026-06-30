@@ -150,12 +150,17 @@ def identify_layer(filepath: str) -> tuple[str, str]:
     return "other", "layer.other"
 
 def find_references(symbol: str, exclude_file: str = "", project_root: str = ".") -> list[str]:
-    
+
     refs = []
     try:
         esc = re.escape(symbol)
-        patterns = [rf'\b{esc}\b']
-        if symbol and symbol[0].islower():
+        # For @-prefixed symbols (annotations), grep -E doesn't support
+        # lookarounds and \b before @ fails. Search for the literal pattern.
+        if symbol.startswith("@"):
+            patterns = [esc]
+        else:
+            patterns = [rf'\b{esc}\b']
+        if not symbol.startswith("@") and symbol and symbol[0].islower():
             cap = symbol[0].upper() + symbol[1:]
             patterns.extend([
                 rf'\bget{cap}\b',
@@ -169,6 +174,10 @@ def find_references(symbol: str, exclude_file: str = "", project_root: str = "."
              "--include=*.ts", "--include=*.tsx", "--include=*.vue",
              "--include=*.js", "--include=*.jsx",
              "--include=*.py", "--include=*.pyi", "--include=*.go",
+             "--include=*.jsp", "--include=*.jspf", "--include=*.tag",
+             "--include=*.yml", "--include=*.yaml",
+             "--include=*.properties", "--include=*.conf",
+             "--include=*.xml",
              "--exclude-dir=.git", "--exclude-dir=node_modules",
              "--exclude-dir=target", "--exclude-dir=build",
              "-l", regex, project_root],
@@ -177,9 +186,9 @@ def find_references(symbol: str, exclude_file: str = "", project_root: str = "."
         )
         for path in result.stdout.strip().splitlines():
             path = path.strip()
-            if path and exclude_file not in path:
+            if path and (not exclude_file or exclude_file not in path):
                 refs.append(path)
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return refs
 
@@ -205,20 +214,28 @@ def find_historical_relations(symbol: str, project_root: str = ".") -> list[str]
                 if p and not any(ign in p for ign in
                                  [".git", "node_modules", "target", "build"]):
                     refs.add(p)
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return list(refs)
 
 COMMON_PATTERNS_CACHE = None
 
-def load_common_patterns(pattern_path: str = "references/common_patterns.md") -> list[dict]:
-    
+def load_common_patterns(pattern_path: str | None = None) -> list[dict]:
+
     global COMMON_PATTERNS_CACHE
     if COMMON_PATTERNS_CACHE is not None:
         return COMMON_PATTERNS_CACHE
 
+    # Resolve relative to this script's directory, not cwd.
+    # This ensures the file is found even when running via commit_guard.py
+    # (where cwd is the user's project, not the skill directory).
+    if pattern_path:
+        p = Path(pattern_path)
+        if not p.is_absolute():
+            p = Path(__file__).parent.parent / pattern_path
+    else:
+        p = Path(__file__).parent.parent / "references" / "common_patterns.md"
     patterns = []
-    p = Path(pattern_path)
     if not p.exists():
         return patterns
 
@@ -238,7 +255,6 @@ def load_common_patterns(pattern_path: str = "references/common_patterns.md") ->
             elif text.startswith("**影响范围"):
                 current["scope"] = _extract_pattern_value(text)
             elif text.startswith("**影响等级"):
-                current["impact_level_line"] = _extract_pattern_value(text)
                 current["impact_level"] = "MAJOR"
                 if "BREAKING" in text:
                     current["impact_level"] = "BREAKING"
@@ -275,21 +291,42 @@ def match_pattern(symbols: list[str], filepath: str) -> Optional[dict]:
     text = " ".join(symbols) + " " + filepath.lower()
     for p in patterns:
         trigger_keywords = p.get("trigger", "")
-        hit_count = sum(1 for kw in trigger_keywords.split() if len(kw) > 2 and kw in text)
-        if hit_count >= 2:
+        if not trigger_keywords:
+            continue
+        kws = trigger_keywords.split()
+        # Count keywords that appear in the combined text
+        hit_count = sum(1 for kw in kws if len(kw) > 2 and kw in text)
+        # Check if the trigger has language-specific keywords (.vue, .tsx, .jsp, etc.)
+        # that act as domain classifiers — if so, the matched text must also contain one.
+        lang_hints = [kw for kw in kws if kw.startswith(".") and len(kw) > 2]
+        has_lang_match = not lang_hints or any(lh in filepath.lower() for lh in lang_hints)
+        if hit_count >= 2 and has_lang_match:
             return p
     return None
 
-def check_frontend_impact(symbols: list[str], filepath: str, project_root: str = ".") -> list[str]:
-    """Search frontend project for symbol references. Returns list of affected files."""
+def check_frontend_impact(symbols: list[str], project_root: str = ".") -> list[str]:
+    """Search frontend project for symbol references. Returns list of affected files.
+
+    Frontend root resolution (first match wins):
+      1. FRONTEND_ROOT env var (path-separated list)
+      2. Common monorepo relative paths
+    """
     env_roots = os.environ.get("FRONTEND_ROOT", "")
-    frontend_paths = [
-        str(Path(project_root) / "../frontend"),
-        str(Path(project_root) / "../web"),
-        str(Path(project_root) / "../../frontend"),
-    ]
+    project_root_path = Path(project_root).resolve()
+    frontend_paths = []
     if env_roots:
-        frontend_paths.extend(env_roots.split(os.pathsep))
+        for r in env_roots.split(os.pathsep):
+            r = r.strip()
+            if r:
+                frontend_paths.append(str(project_root_path / r) if not Path(r).is_absolute() else r)
+    # Fallback: common monorepo layouts
+    if not frontend_paths:
+        for rel in ("../frontend", "../web", "../../frontend",
+                    "frontend", "web", "app", "client"):
+            fp = project_root_path / rel
+            if fp.exists():
+                frontend_paths.append(str(fp.resolve()))
+                break  # Use the first match only
     all_refs = []
     for fp in frontend_paths:
         if Path(fp).exists():
@@ -323,12 +360,6 @@ def _extract_symbol_name(raw_sym: str) -> str:
         if m:
             name = m.group(1)
     return name
-
-DELETION_PREFIXES = (
-    "field_del:", "method_del:", "class_del:", "annotation_del:",
-    "decorator_del:", "interface_del:", "enum_del:", "config_del:",
-    "prop_del:", "file_del:",
-)
 
 def map_impact(manifest: dict, translator: Optional[Translator] = None) -> ImpactMatrix:
     """Map diff manifest to business impact matrix.
@@ -414,10 +445,16 @@ def map_impact(manifest: dict, translator: Optional[Translator] = None) -> Impac
             detail=detail
         ))
 
-    # Data migration
-    if manifest.get("risk_level") == "P0" and any(
-        ch.get("extension") in ("sql", "ddl") for ch in changes
-    ):
+    # Data migration — check consumer impact (accounts for pattern upgrades)
+    sql_breaking_files = {
+        ch.get("file") for ch in changes
+        if ch.get("extension") in ("sql", "ddl")
+    }
+    has_sql_breaking = any(
+        ci.impact == "BREAKING" and ci.file in sql_breaking_files
+        for ci in matrix.consumer_impacts
+    )
+    if has_sql_breaking:
         matrix.data_migration = DataMigration(
             required=True,
             risk="HIGH",
@@ -436,7 +473,7 @@ def map_impact(manifest: dict, translator: Optional[Translator] = None) -> Impac
     # Frontend impact
     all_symbols = sum((ch.get("symbols", []) for ch in changes), [])
     if all_symbols:
-        frontend_files = check_frontend_impact(all_symbols, changes[0].get("file", "") if changes else "")
+        frontend_files = check_frontend_impact(all_symbols)
         if frontend_files:
             matrix.frontend_affected = True
             matrix.frontend_files = frontend_files

@@ -16,6 +16,7 @@ test_files = [
     "test_diff_analyzer.py",
     "test_impact_mapper.py",
     "test_report_generator.py",
+    "test_commit_guard.py",
 ]
 
 # Ensure child processes can output UTF-8 (emoji, Chinese)

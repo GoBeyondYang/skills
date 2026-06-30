@@ -13,52 +13,19 @@ import locale
 
 LANGUAGES = ("en", "zh")
 
+# Centralized deletion prefixes — imported by diff_analyzer and impact_mapper.
+# Add new deletion types here; all consumers pick them up automatically.
+DELETION_PREFIXES = (
+    "field_del:", "method_del:", "class_del:", "annotation_del:",
+    "decorator_del:", "interface_del:", "enum_del:", "config_del:",
+    "prop_del:",
+    "type_del:", "event_del:", "taglib_del:", "include_del:",
+)
+
 STRINGS: dict[str, dict[str, str]] = {
     "en": {
-        "common.added": "added",
-        "common.removed": "removed",
-        "common.new": "New",
-        "common.delete": "Delete",
-        "common.modify": "Modify",
-        "common.rename": "Rename",
-        "common.file": "File",
         "common.files": "files",
-        "common.change": "Change",
-        "common.changes": "changes",
         "common.no_change": "No change",
-        "compatible": "compatible",
-        "incompatible": "incompatible",
-
-        "diff.symbol.field_add": "New field: {name}",
-        "diff.symbol.field_del": "Field deleted: {name}",
-        "diff.symbol.method_add": "New method: {name}",
-        "diff.symbol.method_del": "Method deleted: {name}",
-        "diff.symbol.class_add": "New class: {name}",
-        "diff.symbol.class_del": "Class deleted: {name}",
-        "diff.symbol.annotation_add": "New annotation: {text}",
-        "diff.symbol.annotation_del": "Annotation removed: {text}",
-        "diff.symbol.decorator_add": "New decorator: {text}",
-        "diff.symbol.decorator_del": "Decorator removed: {text}",
-        "diff.symbol.interface_add": "New interface: {name}",
-        "diff.symbol.interface_del": "Interface deleted: {name}",
-        "diff.symbol.type_add": "New type: {name}",
-        "diff.symbol.enum_add": "New enum: {name}",
-        "diff.symbol.enum_del": "Enum removed: {name}",
-        "diff.symbol.config_add": "New config: {name}",
-        "diff.symbol.config_del": "Config deleted: {name}",
-        "diff.symbol.prop_add": "New property: {name}",
-        "diff.symbol.prop_del": "Property deleted: {name}",
-
-        "diff.detail.java": "Java: +{add}/-{rem} method/field/annotation changes",
-        "diff.detail.python": "Python: +{add}/-{rem} method/class/field/decorator changes",
-        "diff.detail.typescript": "TypeScript: +{add}/-{rem} interface/type/method/property changes",
-        "diff.detail.go": "Go: +{add}/-{rem} struct/method/interface changes",
-        "diff.detail.vue": "Vue: +{add}/-{rem} prop/event/state changes",
-        "diff.detail.jsp": "JSP: +{add}/-{rem} taglib/include/bean changes",
-        "diff.detail.sql": "Database schema: {count} DDL operation(s)",
-        "diff.detail.config": "Configuration: {count} item(s) changed",
-        "diff.detail.file_change": "{ext} file changed",
-        "diff.detail.file_delete": "File deleted: {path}",
 
         "diff.summary.no_changes": "No uncommitted changes found",
         "diff.summary.p0": "Found {count} breaking change(s) — immediate impact analysis required",
@@ -161,7 +128,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "report.risk.info_label": "⚪ Info",
         "report.risk.info_note": "No external impact",
         "report.risk.col_header": "Risk",
-        "report.risk.content": "**Risk Level**",
         "report.advice.content": "**Recommended Action**",
 
         "report.impact.breaking_title": "Affected Parties (code changes required)",
@@ -174,6 +140,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "report.impact.api_version_body": "🔶 **Version upgrade needed** — {suggestion}",
         "report.impact.frontend_title": "Frontend Impact",
         "report.impact.frontend_body": "🖥️ **Frontend needs sync update** — type definitions in the frontend project reference these changes",
+        "report.impact.frontend_and_more": "...and {count} more",
+        "report.impact.frontend_list_header": "**Affected files:**",
         "report.impact.no_external": "> No external impact",
 
         "report.decision.instruction": "Product / Tech lead confirms:",
@@ -187,7 +155,6 @@ STRINGS: dict[str, dict[str, str]] = {
 
         "report.graph.data_migration": "🔄 Data migration<br/><small>Plan required</small>",
         "report.graph.ref_prefix": "Other {count} caller(s)",
-        "report.graph.historical": "Historical",
 
         "error.git_diff_failed": "git diff failed: {stderr}",
         "error.pipe_required": "Pipe diff_analyzer.py output via stdin",
@@ -195,55 +162,17 @@ STRINGS: dict[str, dict[str, str]] = {
         "error.pipe_impact": "Pipe impact_mapper.py output via stdin",
         "error.unknown_format": "Unknown input format. Pipe impact_mapper.py or diff_analyzer.py output.",
         "error.impact_mapper_import": "Cannot auto-import impact_mapper: {error}\nUse: python diff_analyzer.py | python impact_mapper.py | python report_generator.py",
-        "error.not_git_repo": "Not a git repository. Initialize git or switch to a repo directory.",
-        "error.no_changes": "No changes to analyze. Run 'git diff --stat' to verify.",
+
+        "guard.block": (
+            "P0 breaking changes detected, commit blocked.\n"
+            "See the report above or conflict-report.md, then confirm before retry.\n"
+            "Decide with AI: Accept → proceed / Reject → rollback / Revise → adjust plan"
+        ),
     },
 
     "zh": {
-        "common.added": "新增",
-        "common.removed": "移除",
-        "common.new": "新增",
-        "common.delete": "删除",
-        "common.modify": "修改",
-        "common.rename": "重命名",
-        "common.file": "文件",
         "common.files": "个文件",
-        "common.change": "变更",
-        "common.changes": "处变更",
         "common.no_change": "无变更",
-        "compatible": "兼容",
-        "incompatible": "不兼容",
-
-        "diff.symbol.field_add": "字段新增：{name}",
-        "diff.symbol.field_del": "字段删除：{name}",
-        "diff.symbol.method_add": "新增方法：{name}",
-        "diff.symbol.method_del": "删除方法：{name}",
-        "diff.symbol.class_add": "新增类：{name}",
-        "diff.symbol.class_del": "删除类：{name}",
-        "diff.symbol.annotation_add": "新增注解：{text}",
-        "diff.symbol.annotation_del": "移除注解：{text}",
-        "diff.symbol.decorator_add": "新增装饰器：{text}",
-        "diff.symbol.decorator_del": "移除装饰器：{text}",
-        "diff.symbol.interface_add": "新增接口：{name}",
-        "diff.symbol.interface_del": "删除接口：{name}",
-        "diff.symbol.type_add": "新增类型：{name}",
-        "diff.symbol.enum_add": "新增枚举：{name}",
-        "diff.symbol.enum_del": "删除枚举：{name}",
-        "diff.symbol.config_add": "新增配置：{name}",
-        "diff.symbol.config_del": "删除配置：{name}",
-        "diff.symbol.prop_add": "新增属性：{name}",
-        "diff.symbol.prop_del": "删除属性：{name}",
-
-        "diff.detail.java": "Java 变更：+{add}/-{rem} 处方法/字段/注解级别变化",
-        "diff.detail.python": "Python 变更：+{add}/-{rem} 处方法/类/字段/装饰器级别变化",
-        "diff.detail.typescript": "TypeScript 变更：+{add}/-{rem} 处接口/类型/方法/属性级别变化",
-        "diff.detail.go": "Go 变更：+{add}/-{rem} 处结构体/方法/接口级别变化",
-        "diff.detail.vue": "Vue 组件变更：+{add}/-{rem} 处属性/事件/状态级别变化",
-        "diff.detail.jsp": "JSP 变更：+{add}/-{rem} 处标签库/包含/Bean 级别变化",
-        "diff.detail.sql": "SQL 结构变更：{count} 处 DDL 操作",
-        "diff.detail.config": "配置变更：{count} 项配置增删",
-        "diff.detail.file_change": "{ext} 文件变更",
-        "diff.detail.file_delete": "文件删除：{path}",
 
         "diff.summary.no_changes": "无未提交变更",
         "diff.summary.p0": "发现 {count} 个破坏性变更，需立即分析业务影响",
@@ -346,7 +275,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "report.risk.info_label": "⚪ 信息",
         "report.risk.info_note": "无外部影响",
         "report.risk.col_header": "风险",
-        "report.risk.content": "**风险等级**",
         "report.advice.content": "**建议操作**",
 
         "report.impact.breaking_title": "受影响方（需改代码）",
@@ -359,6 +287,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "report.impact.api_version_body": "🔶 **需要版本升级** — {suggestion}",
         "report.impact.frontend_title": "前端影响",
         "report.impact.frontend_body": "🖥️ **前端需要同步更新** — 前端项目中引用了本次变更的类型定义",
+        "report.impact.frontend_and_more": "…等 {count} 个文件",
+        "report.impact.frontend_list_header": "**受影响文件:**",
         "report.impact.no_external": "> 无外部影响",
 
         "report.decision.instruction": "请产品/技术负责人确认：",
@@ -372,7 +302,6 @@ STRINGS: dict[str, dict[str, str]] = {
 
         "report.graph.data_migration": "🔄 数据迁移<br/><small>需评估方案</small>",
         "report.graph.ref_prefix": "其他 {count} 处调用方",
-        "report.graph.historical": "历史关联",
 
         "error.git_diff_failed": "git diff 失败：{stderr}",
         "error.pipe_required": "请通过管道传入 diff_analyzer.py 的输出",
@@ -380,8 +309,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "error.pipe_impact": "请通过管道传入 impact_mapper.py 的输出",
         "error.unknown_format": "未知输入格式。请通过管道传入 impact_mapper.py 或 diff_analyzer.py 的输出",
         "error.impact_mapper_import": "无法自动调用 impact_mapper：{error}\n正确用法：python diff_analyzer.py | python impact_mapper.py | python report_generator.py",
-        "error.not_git_repo": "不在 Git 仓库中。请初始化 Git 或切换到仓库目录。",
-        "error.no_changes": "无变更可分析。执行 'git diff --stat' 确认。",
+
+        "guard.block": (
+            "发现 P0 级别破坏性变更，commit 已被拦截。\n"
+            "请查看上方报告或 conflict-report.md，确认后再提交。\n"
+            "需要与 AI 确认：采纳 → 继续提交 / 拒绝 → 回滚 / 修改建议 → 调整方案"
+        ),
     },
 }
 
@@ -407,6 +340,7 @@ TECH_PATTERNS: dict[str, list[tuple[str, str]]] = {
         (r"^enum_add:(\S+)", r"New enum value: \1"),
         (r"^enum_del:(\S+)", r"Enum value removed: \1"),
         (r"^type_add:(\S+)", r"New type: \1"),
+        (r"^type_del:(\S+)", r"Type removed: \1"),
         (r"^prop_add:(\S+)", r"New property: \1"),
         (r"^prop_del:(\S+)", r"Property removed: \1"),
 
@@ -417,6 +351,7 @@ TECH_PATTERNS: dict[str, list[tuple[str, str]]] = {
         (r"(?:^|\| )go:\+(\d+)/-(\d+)", r"Go definitions changed: +\1/-\2"),
         (r"(?:^|\| )vue:\+(\d+)/-(\d+)", r"Vue component changed: +\1/-\2 declarations"),
         (r"(?:^|\| )jsp:\+(\d+)/-(\d+)", r"JSP template changed: +\1/-\2 references"),
+        (r"(?:^|\| )xml:\+(\d+)/-(\d+)", r"XML file changed: +\1/-\2 lines"),
         (r"^event_add:(\w[\w-]*)", r"New custom event: '\1'"),
         (r"^event_del:(\w[\w-]*)", r"Custom event removed: '\1'"),
         (r"^taglib_add:(.+)", r"New tag library: \1"),
@@ -427,7 +362,6 @@ TECH_PATTERNS: dict[str, list[tuple[str, str]]] = {
         (r"(?:^|\| )config:(\d+) changes?", r"Configuration changed: \1 item(s)"),
         (r"(?:^|\| )ddl:(.+)", r"Database structure: \1"),
         (r"(?:^|\| )file_del:(.+)", r"File deleted: \1"),
-        (r"(?:^|\| )file_change:(.+)", r"File changed: \1"),
     ],
     "zh": [
         (r"^field_add:(\S+)", r"新增字段：\1"),
@@ -447,6 +381,7 @@ TECH_PATTERNS: dict[str, list[tuple[str, str]]] = {
         (r"^enum_add:(\S+)", r"新增枚举值：\1"),
         (r"^enum_del:(\S+)", r"删除枚举值：\1"),
         (r"^type_add:(\S+)", r"新增类型：\1"),
+        (r"^type_del:(\S+)", r"删除类型：\1"),
         (r"^prop_add:(\S+)", r"新增属性：\1"),
         (r"^prop_del:(\S+)", r"删除属性：\1"),
 
@@ -456,6 +391,7 @@ TECH_PATTERNS: dict[str, list[tuple[str, str]]] = {
         (r"(?:^|\| )go:\+(\d+)/-(\d+)", r"Go 类型变更：+\1/-\2"),
         (r"(?:^|\| )vue:\+(\d+)/-(\d+)", r"Vue 组件变更：+\1/-\2 处声明变化"),
         (r"(?:^|\| )jsp:\+(\d+)/-(\d+)", r"JSP 模板变更：+\1/-\2 处引用变化"),
+        (r"(?:^|\| )xml:\+(\d+)/-(\d+)", r"XML 文件变更：+\1/-\2 行"),
         (r"^event_add:(\w[\w-]*)", r"新增自定义事件：\1"),
         (r"^event_del:(\w[\w-]*)", r"移除自定义事件：\1"),
         (r"^taglib_add:(.+)", r"新增标签库：\1"),
@@ -466,7 +402,6 @@ TECH_PATTERNS: dict[str, list[tuple[str, str]]] = {
         (r"(?:^|\| )config:(\d+) changes?", r"配置变更：\1 项"),
         (r"(?:^|\| )ddl:(.+)", r"数据库结构变更：\1"),
         (r"(?:^|\| )file_del:(.+)", r"文件删除：\1"),
-        (r"(?:^|\| )file_change:(.+)", r"文件变更：\1"),
     ],
 }
 
@@ -480,42 +415,25 @@ class Translator:
     def _detect_lang(override: str | None) -> str:
         if override and override in LANGUAGES:
             return override
-        # LANG env var takes priority over system locale
-        env = os.environ.get("LANG", "")
-        if env.startswith("zh"):
-            return "zh"
-        if env.startswith("en"):
-            return "en"
+        # Check env vars: LC_ALL > LC_MESSAGES > LANG > system locale
+        for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+            env = os.environ.get(var, "")
+            if env.startswith("zh"):
+                return "zh"
+            if env.startswith("en"):
+                return "en"
         # Fallback to system locale
         try:
-            lc = locale.getdefaultlocale()[0]
+            lc = locale.getlocale()[0]
             if lc and lc.startswith("zh"):
                 return "zh"
         except Exception:
             pass
         return "en"
 
-    @classmethod
-    def from_input(cls, data: dict | None, lang_arg: str | None = None) -> "Translator":
-        """Create a Translator, inheriting lang from pipe JSON data if present.
-
-        Priority: CLI --lang arg > pipe JSON lang field > env / locale default.
-        """
-        pipe_lang = None
-        if data and isinstance(data, dict):
-            pipe_lang = data.get("lang")
-        # CLI arg overrides pipe data
-        effective = lang_arg or pipe_lang
-        return cls(effective)
-
     def t(self, key: str, **kwargs) -> str:
         """Look up a translated string by dot-notation key."""
         text = STRINGS.get(self.lang, {}).get(key) or STRINGS.get("en", {}).get(key, key)
-        return text.format(**kwargs) if kwargs else text
-
-    def tl(self, key: str, lang: str, **kwargs) -> str:
-        """Look up a string in a specific language (for bilingual output)."""
-        text = STRINGS.get(lang, {}).get(key) or STRINGS.get("en", {}).get(key, key)
         return text.format(**kwargs) if kwargs else text
 
     def tech_to_business(self, text: str) -> str:
@@ -528,7 +446,6 @@ class Translator:
 
     def translate_symbol(self, symbol: str) -> str:
         """Translate a language-agnostic symbol (e.g. 'field_add:phone') to human display."""
-        # Currently uses tech_to_business which covers symbol patterns.
         return self.tech_to_business(symbol)
 
     def lang_for_pipe(self) -> str:
@@ -545,13 +462,4 @@ class Translator:
         }
         prefix = key_map.get(impact, "report.risk.info")
         return self.t(f"{prefix}_label"), self.t(f"{prefix}_note")
-
-    def is_deletion_symbol(self, symbol: str) -> bool:
-        """Check if a symbol string represents a deletion/removal."""
-        return any(
-            symbol.startswith(p)
-            for p in ("field_del:", "method_del:", "class_del:", "annotation_del:",
-                      "decorator_del:", "interface_del:", "enum_del:", "config_del:",
-                      "prop_del:", "file_del:", "event_del:", "taglib_del:", "include_del:")
-        )
 

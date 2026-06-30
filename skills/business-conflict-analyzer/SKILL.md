@@ -33,8 +33,12 @@ description: >
   "what breaks", "will this break", "does this break",
   "what's affected", "what services", "who to notify",
   "data migration", "rename field", "field removed", "drop column",
-  "schema change", "interface change", "response format", "response changed", "format changed",
-  "message format", "consumer", "needs update", "need to update",
+  "schema change", "interface change",
+  "response format", "response changed", "format changed",
+  "API response format", "response structure", "endpoint response",
+  "message format", "message schema", "event schema", "event structure",
+  "message structure", "consumer", "consumer compatibility",
+  "needs update", "need to update",
   "API contract", "endpoint", "new version", "version upgrade",
   "deprecated", "approval",
   "props", "emit", "component prop", "event binding", "store state", "context",
@@ -107,7 +111,7 @@ AI 在执行以下任一操作时，应**自动触发**本 Skill：
 
 - Report pushed directly to human (code review comment / IM / inline display)
 - Wait for human feedback:
-  - **Accept / 采纳** → AI proceeds with changes
+  - **Accept / 采纳** → AI proceeds with changes (see [Post-Guard Follow-up Protocol](#post-guard-follow-up-protocol--拦截后闭环追问) and [Auto-Fix](#auto-fix-impacted-consumers--引用方批量修复) below)
   - **Reject / 拒绝** → AI rolls back, records reason
   - **Revision / 修改建议** → AI adjusts approach based on feedback and re-analyzes
 
@@ -200,6 +204,136 @@ Common errors / 常见错误：
 
 ---
 
+## Post-Guard Follow-up Protocol / 拦截后闭环追问
+
+When `commit_guard.py` blocks a commit (P0 detected), the AI MUST automatically engage the user in a closed-loop decision. **Do not just report the block and stop** — proactively ask for a decision.
+
+当 `commit_guard.py` 拦截了 commit（检测到 P0 破坏性变更），AI **必须**自动发起闭环追问决策。不要只报告拦截结果就结束——要主动问用户怎么处理。
+
+### Protocol Steps / 协议步骤
+
+```
+commit_guard.py blocks commit
+    ↓
+AI reads conflict-report.md
+    ↓
+AI summarizes P0 findings in 1-2 sentences
+    ↓
+AI asks user: Accept / Reject / Revise?
+    ↓
+User decides → AI executes → AI verifies
+```
+
+#### Step 1: Acknowledge & Summarize / 告知与摘要
+
+- Tell the user the commit was blocked by Business Conflict Analyzer
+- Read `conflict-report.md` and give a **1-2 sentence summary** of the P0 risk in business language
+- Do **not** dump the full report — just the key finding
+
+Example:
+> "Commit was blocked by Business Conflict Analyzer. The change removes `UserDTO.mobile` field which is consumed by Profile Service and Order Service — this will break their field mappings."
+
+#### Step 2: Ask for Decision / 追问决策
+
+Present three options clearly:
+
+```
+How would you like to proceed?
+
+1. **Accept** — proceed with change, I'll auto-apply compatibility mitigations
+   (@Deprecated, route retention, fallback, calling-site updates)
+2. **Reject** — roll back the change, no action taken
+3. **Revise** — adjust approach (tell me what to change)
+```
+
+Wait for user input — do **not** proceed without a decision.
+
+#### Step 3: Execute / 执行决策
+
+Based on user's choice:
+
+| Decision / 决策 | AI Action / AI 操作 |
+|----------------|-------------------|
+| **Accept** ✅ | 1. Apply compatibility mitigations (auto-add `@Deprecated`, retain old routes/methods with @Deprecated + delegate, add fallback logic for removed fields). 2. Re-run analysis pipeline to verify no P0 remains. 3. If clean → user can commit again. |
+| **Reject** ❌ | 1. `git checkout -- .` to discard changes. 2. Confirm rollback complete. |
+| **Revise** ✏️ | 1. Listen to user's revision guidance. 2. Adjust code accordingly. 3. Re-run analysis pipeline. 4. Present updated report. |
+
+**Important**: The AI should autonomously execute these actions — no additional user instruction needed. If the user says "Accept", the AI should immediately start applying mitigations.
+
+#### Step 4: Verify / 验证
+
+After any modification (mitigations applied or revision made):
+
+1. Re-run the analysis pipeline (run `diff_analyzer.py` + `impact_mapper.py` + `report_generator.py` on current changes)
+2. If clean → tell user "No P0 risks remain, you can commit now"
+3. If still blocked → loop back to Step 2 with updated findings
+
+### Implementation Note / 实现说明
+
+This protocol does not require changes to `commit_guard.py`. The hook already:
+- Prints the report to stderr ✅
+- Saves `conflict-report.md` to project root ✅
+- Outputs JSON stop signal ✅
+
+The AI reads `conflict-report.md` to re-engage the conversation. No additional Python code needed.
+
+---
+
+## Auto-Fix Impacted Consumers / 引用方批量修复
+
+After the user accepts a change (whether via the Post-Guard protocol or in normal conversation), the AI MUST automatically fix **all impacted consumer sites** identified by `impact_mapper.py`, not just the original code being changed.
+
+用户确认采纳变更后（无论是通过拦截后闭环追问还是在正常对话中），AI **必须**自动修复 `impact_mapper.py` 识别的**所有受影响引用方**，而不仅仅是原改动代码。
+
+### Why This Is Explicitly Enforced / 为什么显式要求
+
+| Issue / 问题 | Without instruction / 无指令时 | With instruction / 有指令后 |
+|-------------|------------------------------|---------------------------|
+| **Determinism** | 60-80% chance AI auto-fixes all | **100%** guaranteed |
+| **Scope authorization** | AI may hesitate: "Did user really want me to touch OrderService?" | AI knows it's **authorized to fix all consumers** |
+| **Complex multi-hop chains** | AI may fix obvious ones but miss indirect chains | AI **must** trace and fix the full chain |
+
+### Protocol / 协议
+
+#### Step 1: Collect Consumer Sites / 收集引用点
+
+After user says "Accept" / "采纳":
+
+1. Read the impact analysis report or re-run `impact_mapper.py`
+2. Extract the complete list of impacted consumer sites (file + line + symbol)
+3. Build a fix plan: for each site, determine the corresponding change needed
+
+#### Step 2: Auto-Fix All Sites / 批量自动修复
+
+For each impacted consumer site, apply the matching fix automatically:
+
+| Change Type / 变更类型 | Fix Action / 修复动作 |
+|----------------------|---------------------|
+| **Field renamed** | Update all references: `getOldName()` → `getNewName()`, `.oldField` → `.newField` |
+| **Field removed (with compat)** | Leave calls as-is (compat getter exists), add `// TODO: migrate to newField` |
+| **Field removed (no compat)** | Update to new field path, or remove the call and add warning comment |
+| **Method signature changed** | Update all call sites with new params/return type |
+| **Enum value removed** | Replace usage with equivalent, or add `@SuppressWarnings` + migration comment |
+| **Route/path changed** | Add redirect or update all client API call paths |
+
+**Important**: Do not ask the user per-consumer. Fix all sites autonomously, then report the summary.
+
+#### Step 3: Report Summary / 汇报结果
+
+After all fixes are applied, report:
+
+```markdown
+Auto-fix completed:
+- 9 impacted consumers found
+- 9 auto-fixed (getMobile() → getPhone()) ✅
+- 0 skipped
+- Compilation: verified clean
+```
+
+If some sites could not be auto-fixed (ambiguous change, or file outside project scope), list them explicitly as manual action items.
+
+---
+
 ## Performance / 性能说明
 
 - `impact_mapper.py` uses `grep` for project reference search; large projects (>100K files) may take 5-10s
@@ -212,4 +346,4 @@ Common errors / 常见错误：
 
 1. **Not a replacement for Rules** / 不替代 Rule: Technical red lines (SQL injection prevention, security policies) are defined in `CLAUDE.md`
 2. **Not a replacement for Tests** / 不替代测试: This Skill generates *business conflict analysis*, not test reports
-3. **Does not block development** / 不阻塞开发: Results inform human decisions; the AI does not autonomously block changes
+3. **Blocks only P0 / 仅拦截 P0**: `commit_guard.py` blocks P0 (compile-breaking) changes only — lower-risk changes pass through and are reported without blocking. The human always has final say via the Accept/Reject/Revise loop.

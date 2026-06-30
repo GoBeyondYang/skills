@@ -59,38 +59,6 @@ def test_translator_env_var_en():
     print(f"  [OK] test_translator_env_var_en")
 
 
-def test_translator_from_input():
-    """from_input inherits lang from pipe data."""
-    data = {"lang": "zh", "changes": []}
-    t = Translator.from_input(data)
-    assert t.lang == "zh", f"from_input should inherit 'zh', got '{t.lang}'"
-    print(f"  [OK] test_translator_from_input")
-
-
-def test_translator_from_input_no_lang():
-    """from_input without lang in data falls back to env / locale default."""
-    data = {"changes": []}
-    t = Translator.from_input(data)
-    assert t.lang in ("en", "zh"), f"from_input no lang should give valid lang, got '{t.lang}'"
-    print(f"  [OK] test_translator_from_input_no_lang: lang={t.lang}")
-
-
-def test_translator_from_input_arg_override():
-    """from_input with explicit CLI arg overrides pipe data."""
-    data = {"lang": "zh", "changes": []}
-    t = Translator.from_input(data, lang_arg="en")
-    assert t.lang == "en", f"from_input CLI arg 'en' should override pipe 'zh', got '{t.lang}'"
-    print(f"  [OK] test_translator_from_input_arg_override")
-
-
-def test_translator_from_input_pipe_overrides_env():
-    """from_input pipe data lang overrides system locale when no CLI arg."""
-    data = {"lang": "en", "changes": []}
-    t = Translator.from_input(data)
-    assert t.lang == "en", f"from_input pipe 'en' should be 'en', got '{t.lang}'"
-    print(f"  [OK] test_translator_from_input_pipe_overrides_env")
-
-
 def test_t_basic_lookup():
     """t() returns the correct string for a key."""
     t = Translator("en")
@@ -131,16 +99,6 @@ def test_t_missing_key():
     print(f"  [OK] test_t_missing_key")
 
 
-def test_tl_specific_lang():
-    """tl() looks up in a specific language regardless of instance lang."""
-    t = Translator("en")
-    zh_result = t.tl("diff.summary.p0", "zh", count=3)
-    en_result = t.tl("diff.summary.p0", "en", count=3)
-    assert "破坏性" in zh_result, f"tl('zh') should give Chinese: {zh_result}"
-    assert "breaking" in en_result.lower(), f"tl('en') should give English: {en_result}"
-    print(f"  [OK] test_tl_specific_lang")
-
-
 def test_tech_to_business_symbol_en():
     """tech_to_business translates field_add symbol in English."""
     t = Translator("en")
@@ -177,24 +135,16 @@ def test_risk_display():
     print(f"  [OK] test_risk_display")
 
 
-def test_is_deletion_symbol():
-    """is_deletion_symbol correctly identifies deletion symbols."""
-    t = Translator("en")
-    assert t.is_deletion_symbol("field_del:phone"), "field_del should be deletion"
-    assert t.is_deletion_symbol("class_del:UserDTO"), "class_del should be deletion"
-    assert not t.is_deletion_symbol("field_add:phone"), "field_add should not be deletion"
-    assert not t.is_deletion_symbol("annotation_add:@NotNull"), "annotation_add should not be deletion"
-    print(f"  [OK] test_is_deletion_symbol")
-
-
 def test_all_languages_have_keys():
-    """All EN keys exist in ZH (keys may differ but all keys should be covered)."""
+    """EN and ZH key sets must be identical (bidirectional check)."""
     en_keys = set(STRINGS["en"].keys())
     zh_keys = set(STRINGS["zh"].keys())
-    # EN may have more keys than ZH (recent additions), but ZH should not have keys EN lacks
     extra_zh = zh_keys - en_keys
+    missing_zh = en_keys - zh_keys
     assert not extra_zh, f"ZH has keys not in EN: {extra_zh}"
-    print(f"  [OK] test_all_languages_have_keys: {len(en_keys)} EN / {len(zh_keys)} ZH keys")
+    assert not missing_zh, f"EN has keys missing in ZH: {missing_zh}"
+    assert en_keys == zh_keys, f"Key sets differ: EN={len(en_keys)} ZH={len(zh_keys)}"
+    print(f"  [OK] test_all_languages_have_keys: {len(en_keys)} EN / {len(zh_keys)} ZH keys (identical)")
 
 
 if __name__ == "__main__":
@@ -207,21 +157,15 @@ if __name__ == "__main__":
         test_translator_explicit,
         test_translator_env_var,
         test_translator_env_var_en,
-        test_translator_from_input,
-        test_translator_from_input_no_lang,
-        test_translator_from_input_arg_override,
-        test_translator_from_input_pipe_overrides_env,
         test_t_basic_lookup,
         test_t_basic_lookup_zh,
         test_t_with_format,
         test_t_with_format_zh,
         test_t_missing_key,
-        test_tl_specific_lang,
         test_tech_to_business_symbol_en,
         test_tech_to_business_symbol_zh,
         test_tech_to_business_detail_en,
         test_risk_display,
-        test_is_deletion_symbol,
         test_all_languages_have_keys,
     ]
 

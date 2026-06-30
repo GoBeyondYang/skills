@@ -12,9 +12,21 @@ Detect API/field/schema breaking changes, analyze business impact, push bilingua
 
 ## Install / 安装
 
+### Skill registration
+
 ```bash
-claude add skill https://github.com/GoBeyondYang/skills/raw/main/skills/business-conflict-analyzer/SKILL.md
+claude add skill SKILL.md
 ```
+
+### Commit guard (optional)
+
+Install the `BeforeCommand` hook to **automatically block commits** with P0 breaking changes:
+
+```bash
+bash /path/to/skill/scripts/install_hook.sh
+```
+
+This adds a `.claude/settings.local.json` entry in your project that intercepts `git commit` and runs the analysis pipeline.
 
 ## Docs / 文档
 

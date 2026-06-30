@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from impact_mapper import (
     identify_layer, match_pattern, map_impact,
     ConsumerImpact, ImpactMatrix, load_common_patterns,
+    find_references,
 )
 from lang import Translator
 
@@ -241,6 +242,39 @@ def test_map_impact_i18n_zh():
     print(f"  [OK] test_map_impact_i18n_zh")
 
 
+def test_find_references():
+    """find_references returns matching source files."""
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        # Create a small "project" with a reference to search for
+        os.makedirs(f"{tmp}/src", exist_ok=True)
+        with open(f"{tmp}/src/Service.java", "w") as f:
+            f.write("class Service { UserDTO user; }")
+        with open(f"{tmp}/src/Other.java", "w") as f:
+            f.write("class Other { String mobile; }")
+
+        refs = find_references("UserDTO", project_root=tmp)
+        assert any("Service.java" in r for r in refs), f"Should find Service.java: {refs}"
+        assert not any("Other.java" in r for r in refs), f"Should NOT find Other.java: {refs}"
+    print(f"  [OK] test_find_references: {len(refs)} reference(s)")
+
+
+def test_find_references_annotation():
+    """find_references handles @-prefixed symbols (regression)."""
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(f"{tmp}/src", exist_ok=True)
+        with open(f"{tmp}/src/MyDTO.java", "w") as f:
+            f.write("import jakarta.validation.constraints.NotNull;\n")
+            f.write("class MyDTO { @NotNull String name; }")
+
+        refs = find_references("@NotNull", project_root=tmp)
+        # @NotNull search should find the file (regression: \b@ fails)
+        assert any("MyDTO.java" in r for r in refs), \
+            f"find_references(@NotNull) should find file: {refs}"
+    print(f"  [OK] test_find_references_annotation: {len(refs)} reference(s)")
+
+
 if __name__ == "__main__":
     print(f"\n{'='*50}")
     print(f"  impact_mapper tests")
@@ -267,6 +301,8 @@ if __name__ == "__main__":
         test_map_impact_empty,
         test_map_impact_i18n_en,
         test_map_impact_i18n_zh,
+        test_find_references,
+        test_find_references_annotation,
     ]
 
     passed = 0

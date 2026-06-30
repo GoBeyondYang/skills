@@ -23,16 +23,17 @@ from pathlib import Path
 _script_dir = str(Path(__file__).parent.resolve())
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
-from lang import Translator
+from lang import Translator, DELETION_PREFIXES as _DEL_PREFIXES
 
 @dataclass
 class Change:
-    type: str          # ADD / MODIFY / DELETE / RENAME
+    type: str          # A (Added) / M (Modified) / D (Deleted) / R (Renamed) / C (Copied) / T (TypeChanged)
     file: str
     extension: str
     risk_level: str    # P0 / P1 / P2
     symbols: list = field(default_factory=list)
     details: str = ""
+    reason: str = ""   # i18n key explaining why this risk level was assigned
 
 @dataclass
 class DiffManifest:
@@ -48,7 +49,7 @@ class DiffManifest:
     summary_params: dict = field(default_factory=dict)
 
 def run_git_diff(*args: str) -> str:
-    
+    """Run git diff with given args and return stdout. Exits on error."""
     cmd = ["git", "diff"] + list(args)
     try:
         result = subprocess.run(
@@ -56,13 +57,17 @@ def run_git_diff(*args: str) -> str:
             encoding="utf-8", errors="replace"
         )
         return result.stdout
-    except subprocess.CalledProcessError as e:
+    except FileNotFoundError:
         t = Translator()
-        print(t.t("error.git_diff_failed", stderr=e.stderr), file=sys.stderr)
+        print(t.t("error.git_diff_failed", stderr="git not found in PATH"), file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        t = Translator()
+        print(t.t("error.git_diff_failed", stderr=str(e)), file=sys.stderr)
         sys.exit(1)
 
 def get_changed_files(target: str = "HEAD") -> list[tuple[str, str]]:
-    
+    """Get (status, filepath) tuples from git diff --name-status for the given target."""
     if target == "--cached":
         args = ["--cached", "--name-status"]
     else:
@@ -74,14 +79,34 @@ def get_changed_files(target: str = "HEAD") -> list[tuple[str, str]]:
     for line in raw.splitlines():
         parts = line.split("\t")
         if len(parts) >= 2:
-            files.append((parts[0], parts[1]))
+            status = parts[0]
+            # Normalize rename status (R100, R050, etc.) to "R"
+            if status.startswith("R") and status != "R":
+                status = "R"
+            if status.startswith("C") and status != "C":
+                status = "C"
+            files.append((status, parts[1]))
     return files
 
-JAVA_SIG_PATTERN = re.compile(
-    r'^\s*(public|private|protected|static|final|abstract|synchronized|default)\s+.*'
-    r'(class|interface|enum|@interface)\s+\w+|'
-    r'(public|private|protected|static|final|abstract|synchronized|default)\s+.*'
-    r'(\w+)\s*\(.*\)\s*(\{|throws|$)'
+# Three separate patterns replacing one monolithic regex:
+#   Pattern 1: class/interface/enum declarations with modifiers
+#   Pattern 2: method declarations WITH modifiers (public String getName() { ... })
+#   Pattern 3: method declarations WITHOUT modifiers (String getName(); — interface/Feign)
+# Split approach avoids catastrophic backtracking from nested quantifiers.
+_JAVA_CLASS_PATTERN = re.compile(
+    r'^\s*(?:public|private|protected|static|final|abstract|synchronized|default)\s+.*'
+    r'(class|interface|enum|@interface)\s+\w+'
+)
+_JAVA_METHOD_MOD_PATTERN = re.compile(
+    r'(?:public|private|protected|static|final|abstract|synchronized|default)\s+.*'
+    r'(\w+)\s*\([^)]*\)\s*(?:\{|throws|$)'
+)
+_JAVA_METHOD_NOMOD_PATTERN = re.compile(
+    r'^\s*[\w<>,?\[\].]+\s+(\w+)\s*\([^)]*\)\s*(?:\{|;|throws)'
+)
+# Package-private class/interface/enum (no modifier prefix)
+_JAVA_PKGPRIVATE_CLASS_PATTERN = re.compile(
+    r'^\s*(class|interface|enum)\s+\w+'
 )
 FIELD_PATTERN = re.compile(
     r'^\s*(private|public|protected|static|final|transient|volatile)\s+[\w<>,?\[\]]+\s+\w+'
@@ -92,7 +117,7 @@ SQL_DDL_PATTERN = re.compile(
     r'MODIFY\s+COLUMN|CHANGE\s+COLUMN|RENAME\s+(TO|COLUMN))',
     re.IGNORECASE
 )
-YAML_KEY_PATTERN = re.compile(r'^[+-]\s*[\w.-]+:')
+YAML_KEY_PATTERN = re.compile(r'^[+-]\s*(?:[\w.-]+|["\'](?:[^"\']+)["\'])\s*:')
 
 _SYM_ADD  = "field_add"   # field_add:name
 _SYM_DEL  = "field_del"   # field_del:name
@@ -107,35 +132,20 @@ _SYM_DDEL = "decorator_del"
 _SYM_IADD = "interface_add"
 _SYM_IDEL = "interface_del"
 _SYM_TADD = "type_add"
+_SYM_TDEL = "type_del"
 _SYM_EADD = "enum_add"
 _SYM_EDEL = "enum_del"
-_SYM_CADD2 = "config_add"
-_SYM_CDEL2 = "config_del"
 _SYM_PADD = "prop_add"
 _SYM_PDEL = "prop_del"
 
 def _sym(prefix_add: str, prefix_del: str, is_addition: bool, name: str) -> str:
-    
+    """Build a symbol string: prefix_add:name (addition) or prefix_del:name (deletion)."""
     prefix = prefix_add if is_addition else prefix_del
     return f"{prefix}:{name}"
 
-def _detail_java(added: int, removed: int) -> str:
-    return f"java:+{added}/-{removed}"
-
-def _detail_python(added: int, removed: int) -> str:
-    return f"python:+{added}/-{removed}"
-
-def _detail_typescript(added: int, removed: int) -> str:
-    return f"typescript:+{added}/-{removed}"
-
-def _detail_go(added: int, removed: int) -> str:
-    return f"go:+{added}/-{removed}"
-
-def _detail_vue(added: int, removed: int) -> str:
-    return f"vue:+{added}/-{removed}"
-
-def _detail_jsp(added: int, removed: int) -> str:
-    return f"jsp:+{added}/-{removed}"
+def _detail(lang: str, added: int, removed: int) -> str:
+    """Build a detail string like 'java:+3/-2' for a given language."""
+    return f"{lang}:+{added}/-{removed}"
 
 def _detail_sql(count: int) -> str:
     return f"sql:{count} DDL"
@@ -144,7 +154,7 @@ def _detail_config(count: int) -> str:
     return f"config:{count} changes"
 
 def extract_java_diff(diff_text: str) -> tuple[list[str], str]:
-    
+    """Parse Java diff — class, interface, enum, method, field, annotation changes."""
     symbols = []
     added = 0
     removed = 0
@@ -155,16 +165,43 @@ def extract_java_diff(diff_text: str) -> tuple[list[str], str]:
             continue
         is_addition = line.startswith("+")
 
-        if JAVA_SIG_PATTERN.match(stripped):
-            match = re.search(r'(class|interface|enum)\s+(\w+)', stripped) or \
-                    re.search(r'(?:public|private|protected|static|final|\s)*\s+(\w+)\s*\(', stripped)
-            if match:
-                name = match.group(2) if match.lastindex and match.lastindex >= 2 else match.group(1)
-                symbols.append(_sym(_SYM_CADD, _SYM_CDEL, is_addition, name))
+        if _JAVA_CLASS_PATTERN.match(stripped):
+            m = re.search(r'(class|interface|enum)\s+(\w+)', stripped)
+            if m:
+                kind = m.group(1)
+                name = m.group(2)
+                if kind == "interface":
+                    symbols.append(_sym(_SYM_IADD, _SYM_IDEL, is_addition, name))
+                elif kind == "enum":
+                    symbols.append(_sym(_SYM_EADD, _SYM_EDEL, is_addition, name))
+                else:
+                    symbols.append(_sym(_SYM_CADD, _SYM_CDEL, is_addition, name))
                 if is_addition:
                     added += 1
                 else:
                     removed += 1
+        elif _JAVA_PKGPRIVATE_CLASS_PATTERN.match(stripped):
+            m = re.search(r'(class|interface|enum)\s+(\w+)', stripped)
+            if m:
+                kind = m.group(1)
+                name = m.group(2)
+                if kind == "interface":
+                    symbols.append(_sym(_SYM_IADD, _SYM_IDEL, is_addition, name))
+                elif kind == "enum":
+                    symbols.append(_sym(_SYM_EADD, _SYM_EDEL, is_addition, name))
+                else:
+                    symbols.append(_sym(_SYM_CADD, _SYM_CDEL, is_addition, name))
+                if is_addition:
+                    added += 1
+                else:
+                    removed += 1
+        elif _JAVA_METHOD_MOD_PATTERN.match(stripped) or _JAVA_METHOD_NOMOD_PATTERN.match(stripped):
+            m = re.search(r'(?:public|private|protected|static|final|\s)*\s*(\w+)\s*\(', stripped) or \
+                re.search(r'(\w+)\s*\(', stripped)
+            if m:
+                symbols.append(_sym(_SYM_MADD, _SYM_MDEL, is_addition, m.group(1)))
+                if is_addition: added += 1
+                else: removed += 1
         elif FIELD_PATTERN.match(stripped):
             field_match = re.search(r'[\w<>,?\[\]]+\s+(\w+)\s*[;=]', stripped)
             if field_match:
@@ -179,11 +216,22 @@ def extract_java_diff(diff_text: str) -> tuple[list[str], str]:
                 added += 1
             else:
                 removed += 1
+        elif re.match(r'^\s*\w+\s*\(', stripped) and not stripped.startswith(
+                ("if", "for", "while", "switch", "catch", "return", "new", "this", "super")):
+            # Catches package-private constructors: ClassName(param) { ... }
+            # and other modifier-less methods. Excludes control-flow keywords.
+            m = re.match(r'^\s*(\w+)\s*\(', stripped)
+            if m:
+                symbols.append(_sym(_SYM_MADD, _SYM_MDEL, is_addition, m.group(1)))
+                if is_addition:
+                    added += 1
+                else:
+                    removed += 1
 
-    return symbols, _detail_java(added, removed)
+    return symbols, _detail("java", added, removed)
 
 def extract_sql_diff(diff_text: str) -> tuple[list[str], str]:
-    
+    """Parse SQL diff — ALTER/CREATE/DROP DDL statements."""
     symbols = []
     for line in diff_text.splitlines():
         stripped = line[1:].strip() if line.startswith(("+", "-")) else ""
@@ -192,7 +240,7 @@ def extract_sql_diff(diff_text: str) -> tuple[list[str], str]:
     return symbols, _detail_sql(len(symbols))
 
 def extract_yaml_diff(diff_text: str) -> tuple[list[str], str]:
-    
+    """Parse YAML diff — config key additions and deletions."""
     symbols = []
     for line in diff_text.splitlines():
         if line.startswith("+") and YAML_KEY_PATTERN.match(line):
@@ -203,15 +251,40 @@ def extract_yaml_diff(diff_text: str) -> tuple[list[str], str]:
             symbols.append(f"config_del:{key}")
     return symbols, _detail_config(len(symbols))
 
+
+def extract_properties_diff(diff_text: str) -> tuple[list[str], str]:
+    """Parse .properties / .conf file diff — key=value changes."""
+    symbols = []
+    for line in diff_text.splitlines():
+        if not line.startswith(("+", "-")):
+            continue
+        stripped = line[1:].strip()
+        is_addition = line.startswith("+")
+        # key=value or key: value format
+        m = re.match(r'^([\w.-]+)\s*[=:]', stripped)
+        if m:
+            key = m.group(1).rstrip(":")
+            symbols.append(f"config_{'add' if is_addition else 'del'}:{key}")
+    return symbols, _detail_config(len(symbols))
+
+
+def extract_xml_diff(diff_text: str) -> tuple[list[str], str]:
+    """Parse XML diff — count added/removed lines for element-level change awareness."""
+    added = sum(1 for line in diff_text.splitlines()
+                if line.startswith("+") and line[1:].strip())
+    removed = sum(1 for line in diff_text.splitlines()
+                  if line.startswith("-") and line[1:].strip())
+    return [], f"xml:+{added}/-{removed}"
+
 def extract_python_diff(diff_text: str) -> tuple[list[str], str]:
-    
+    """Parse Python diff — class, function, decorator, field changes."""
     symbols = []
     added = 0
     removed = 0
 
     for line in diff_text.splitlines():
         stripped = line[1:].strip() if line.startswith(("+", "-")) else ""
-        if not stripped or stripped.startswith(("import ", "from ", "# ", "\"\"\"")):
+        if not stripped or stripped.startswith(("import ", "from ", "# ", "\"\"\"", "'''")):
             continue
         is_addition = line.startswith("+")
 
@@ -247,17 +320,17 @@ def extract_python_diff(diff_text: str) -> tuple[list[str], str]:
                 else:
                     removed += 1
 
-    return symbols, _detail_python(added, removed)
+    return symbols, _detail("python", added, removed)
 
 def extract_typescript_diff(diff_text: str) -> tuple[list[str], str]:
-    
+    """Parse TypeScript/JS diff — interface, type, class, enum, method, field changes."""
     symbols = []
     added = 0
     removed = 0
 
     for line in diff_text.splitlines():
         stripped = line[1:].strip() if line.startswith(("+", "-")) else ""
-        if not stripped or stripped.startswith(("import ", "export type", "//", "/*")):
+        if not stripped or stripped.startswith(("import ", "export type {", "export type{", "//", "/*")):
             continue
         is_addition = line.startswith("+")
 
@@ -278,7 +351,7 @@ def extract_typescript_diff(diff_text: str) -> tuple[list[str], str]:
                 if kind == "interface":
                     symbols.append(_sym(_SYM_IADD, _SYM_IDEL, is_addition, name))
                 elif kind == "type":
-                    symbols.append(_sym(_SYM_TADD, _SYM_TADD, is_addition, name))  # no "type_del"
+                    symbols.append(_sym(_SYM_TADD, _SYM_TDEL, is_addition, name))
                 elif kind == "enum":
                     symbols.append(_sym(_SYM_EADD, _SYM_EDEL, is_addition, name))
                 else:
@@ -303,7 +376,53 @@ def extract_typescript_diff(diff_text: str) -> tuple[list[str], str]:
             else:
                 removed += 1
 
-    return symbols, _detail_typescript(added, removed)
+    return symbols, _detail("typescript", added, removed)
+
+
+def extract_go_diff(diff_text: str) -> tuple[list[str], str]:
+    """Parse Go diff — struct fields, interface methods, function signatures."""
+    symbols = []
+
+    _GO_FIELD_RE = re.compile(r'^\s*(\w+)\s+[\w.*\[\]]+')
+    _GO_FUNC_RE = re.compile(r'^\s*(?:func\s+(?:\([^)]*\)\s+)?(\w+))\s*\(')
+
+    for line in diff_text.splitlines():
+        if not line.startswith(("+", "-")):
+            continue
+        stripped = line[1:].strip()
+        is_addition = line.startswith("+")
+
+        # Function/method: func Name(...) or func (r *T) Name(...)
+        m = _GO_FUNC_RE.search(stripped)
+        if m:
+            symbols.append(_sym(_SYM_MADD, _SYM_MDEL, is_addition, m.group(1)))
+            continue
+
+        # Struct field: Name Type
+        m = _GO_FIELD_RE.match(stripped)
+        if m:
+            symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(1)))
+            continue
+
+        # Interface declaration: type Name interface
+        if re.match(r'^\s*type\s+\w+\s+interface', stripped):
+            m = re.search(r'type\s+(\w+)\s+interface', stripped)
+            if m:
+                symbols.append(_sym(_SYM_IADD, _SYM_IDEL, is_addition, m.group(1)))
+                continue
+
+        # Struct declaration: type Name struct
+        if re.match(r'^\s*type\s+\w+\s+struct', stripped):
+            m = re.search(r'type\s+(\w+)\s+struct', stripped)
+            if m:
+                symbols.append(_sym(_SYM_CADD, _SYM_CDEL, is_addition, m.group(1)))
+                continue
+
+    symbols = list(dict.fromkeys(symbols))
+    go_adds = sum(1 for s in symbols if "_add:" in s)
+    go_dels = sum(1 for s in symbols if "_del:" in s)
+    return symbols, _detail("go", go_adds, go_dels)
+
 
 # Vue SFC parser
 
@@ -315,8 +434,6 @@ _VUE_TEMPLATE_END_RE = re.compile(r'^\s*</template>')
 def extract_vue_diff(diff_text: str) -> tuple[list[str], str]:
     """Parse Vue SFC diff — <script> props/emits/state, <template> bindings."""
     symbols = []
-    added = 0
-    removed = 0
     in_script = False
     in_template = False
 
@@ -352,56 +469,45 @@ def extract_vue_diff(diff_text: str) -> tuple[list[str], str]:
             m = re.search(r"""defineModel\s*\(\s*['"](\w[\w-]*)['"]""", stripped)
             if m:
                 symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(1)))
-                if is_addition: added += 1
-                else: removed += 1
                 continue
 
             m = re.search(r"""defineEmits\s*\(\s*\[([^\]]+)\]""", stripped)
             if m:
                 for evt in re.findall(r"""['"](\w[\w-]*)['"]""", m.group(1)):
                     symbols.append(f"event_{'add' if is_addition else 'del'}:{evt}")
-                    if is_addition: added += 1
-                    else: removed += 1
                 continue
 
             m = re.match(r"""^\s*['"](\w[\w-]*)['"]\s*[,)\]]""", stripped)
             if m:
                 symbols.append(f"event_{'add' if is_addition else 'del'}:{m.group(1)}")
-                if is_addition: added += 1
-                else: removed += 1
                 continue
 
             m = re.match(r'^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:ref|reactive|computed|shallowRef|shallowReactive)\s*\(', stripped)
             if m:
                 symbols.append(_sym(_SYM_PADD, _SYM_PDEL, is_addition, m.group(1)))
-                if is_addition: added += 1
-                else: removed += 1
                 continue
 
             m = re.match(r"""^\s*['"]?(\w+)['"]?\s*:\s*(?:\{|String|Number|Boolean|Array|Object|Function|Date|RegExp|Symbol)\b""", stripped)
             if m and m.group(1) not in ('props', 'emits', 'type', 'default', 'required', 'validator', 'setup', 'data', 'methods', 'computed', 'watch', 'components', 'directives', 'filters'):
                 symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(1)))
-                if is_addition: added += 1
-                else: removed += 1
                 continue
 
         elif in_template:
             # :prop / v-bind:prop (consumer side)
             for m in re.finditer(r'(?:v-bind|:)([\w-]+)\s*=', stripped):
                 symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(1)))
-                if is_addition: added += 1
-                else: removed += 1
             # @event (consumer side)
             for m in re.finditer(r'@([\w-]+)\s*=', stripped):
                 symbols.append(f"event_{'add' if is_addition else 'del'}:{m.group(1)}")
-                if is_addition: added += 1
-                else: removed += 1
+            # {{ obj.field }} interpolation (track field-level changes)
+            for m in re.finditer(r'\{\{\s*(\w+)\.(\w+)\s*\}\}', stripped):
+                symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, m.group(2)))
 
     # Dedup same prop appearing in both <script> and <template>
     symbols = list(dict.fromkeys(symbols))
-    added = sum(1 for s in symbols if "_add:" in s)
-    removed = sum(1 for s in symbols if "_del:" in s)
-    return symbols, _detail_vue(added, removed)
+    vue_adds = sum(1 for s in symbols if "_add:" in s)
+    vue_dels = sum(1 for s in symbols if "_del:" in s)
+    return symbols, _detail("vue", vue_adds, vue_dels)
 
 # JSP parser
 
@@ -459,21 +565,24 @@ def extract_jsp_diff(diff_text: str) -> tuple[list[str], str]:
 
         for m in _JSP_EL_RE.finditer(stripped):
             expr = m.group(1).strip()
-            if '.' in expr or re.match(r'^\w+$', expr):
+            if '.' in expr:
+                # ${user.mobile} → extract just "mobile" (field name)
+                field = expr.rsplit('.', 1)[-1].strip()
+                if field:
+                    symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, field))
+                    if is_addition:
+                        added += 1
+                    else:
+                        removed += 1
+            elif re.match(r'^\w+$', expr):
                 symbols.append(_sym(_SYM_ADD, _SYM_DEL, is_addition, expr))
                 if is_addition: added += 1
                 else: removed += 1
 
-    return symbols, _detail_jsp(added, removed)
-
-DELETION_PREFIXES = (
-    "field_del:", "method_del:", "class_del:", "annotation_del:",
-    "decorator_del:", "interface_del:", "enum_del:", "config_del:",
-    "prop_del:", "file_del:", "event_del:", "taglib_del:", "include_del:",
-)
+    return symbols, _detail("jsp", added, removed)
 
 def classify_risk(status: str, extension: str, symbols: list, is_breaking: bool) -> tuple[str, str]:
-    
+    """Determine risk level (P0/P1/P2) and a reason i18n key based on change metadata."""
     if status == "D":
         return "P0", "diff.reason.file_deleted"
     if is_breaking:
@@ -494,12 +603,16 @@ def classify_risk(status: str, extension: str, symbols: list, is_breaking: bool)
     return "P2", "diff.reason.internal_refactor"
 
 def _has_deletion(symbols: list[str]) -> bool:
-    
-    return any(s.startswith(DELETION_PREFIXES) for s in symbols)
+    """Check if any symbol represents a deletion (matched against DELETION_PREFIXES)."""
+    return any(s.startswith(_DEL_PREFIXES) for s in symbols)
 
-def _detail_fallback(status: str, filepath: str) -> str:
-    
-    return f"file_change:{status} {filepath}"
+def _detail_fallback(extension: str, status: str, t: Translator) -> str:
+    """Fallback detail when no extractor matched. Produces language-appropriate output."""
+    if t.lang == "zh":
+        labels_zh = {"A": "新增", "M": "已修改", "D": "已删除", "R": "已重命名"}
+        return f"{extension} 文件{labels_zh.get(status, '已变更')}"
+    labels = {"A": "added", "M": "modified", "D": "deleted", "R": "renamed"}
+    return f"{extension} file {labels.get(status, 'changed')}"
 
 def analyze(target: str = "HEAD", lang: str | None = None) -> DiffManifest:
     """Run analysis and return a DiffManifest.
@@ -557,22 +670,11 @@ def analyze(target: str = "HEAD", lang: str | None = None) -> DiffManifest:
             path_lower = filepath.lower()
             if any(kw in path_lower for kw in ["controller", "dto", "vo", "feign", "client", "api", "ktor"]):
                 is_breaking = True
+            if _has_deletion(symbols):
+                is_breaking = True
 
         elif ext == "go":
-            symbols, _ = extract_typescript_diff(diff_text)
-            # Go struct field detection (field_add/del even when type changes)
-            _GO_FIELD_RE = re.compile(r'^\s*(\w+)\s+[\w.*\[\]]+')
-            for line in diff_text.splitlines():
-                if line.startswith(("+", "-")):
-                    stripped = line[1:].strip()
-                    m = _GO_FIELD_RE.match(stripped)
-                    if m:
-                        sym = f"field_{'add' if line.startswith('+') else 'del'}:{m.group(1)}"
-                        symbols.append(sym)
-            symbols = list(dict.fromkeys(symbols))
-            go_adds = sum(1 for s in symbols if "_add:" in s)
-            go_dels = sum(1 for s in symbols if "_del:" in s)
-            detail = _detail_go(go_adds, go_dels)
+            symbols, detail = extract_go_diff(diff_text)
             path_lower = filepath.lower()
             if any(kw in path_lower for kw in ["handler", "api", "transport", "endpoint", "delivery"]):
                 is_breaking = True
@@ -597,11 +699,15 @@ def analyze(target: str = "HEAD", lang: str | None = None) -> DiffManifest:
             if symbols and any("DROP" in s.upper() for s in symbols):
                 is_breaking = True
 
-        elif ext in ("yml", "yaml", "properties", "conf"):
+        elif ext in ("yml", "yaml"):
             symbols, detail = extract_yaml_diff(diff_text)
+        elif ext in ("properties", "conf"):
+            symbols, detail = extract_properties_diff(diff_text)
+        elif ext == "xml":
+            symbols, detail = extract_xml_diff(diff_text)
 
         if not detail:
-            detail = _detail_fallback(status, filepath)
+            detail = _detail_fallback(ext, status, t)
 
         risk_level, risk_reason_key = classify_risk(status, ext, symbols, is_breaking)
         change = Change(
@@ -611,6 +717,7 @@ def analyze(target: str = "HEAD", lang: str | None = None) -> DiffManifest:
             risk_level=risk_level,
             symbols=symbols,
             details=detail,
+            reason=risk_reason_key,
         )
         manifest.changes.append(change)
 
