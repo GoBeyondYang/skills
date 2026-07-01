@@ -71,7 +71,7 @@ def test_tech_to_business_fallback():
     print(f"  [OK] test_tech_to_business_fallback")
 
 
-# generate_report bilingual tests
+# generate_report language-aware tests
 
 def test_generate_report_has_decision_section_en():
     """English report contains Decision section."""

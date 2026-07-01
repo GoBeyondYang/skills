@@ -163,11 +163,11 @@ Compilation: verified clean (Java / Go / TypeScript / Kotlin)
 
 ### ✅ Decision
 
-> Product / Tech lead confirms:
+> Reply with number:
 
-- [ ] **Accept — proceed with changes, auto-fix all impacted consumers**
-- [ ] **Reject — rollback, reason: _______________**
-- [ ] **Revision needed — adjust approach: _______________**
+- **[1] Accept** — proceed, auto-fix all impacted consumers
+- **[2] Reject** — rollback change
+- **[3] Revise** — adjust approach
 
 ---
 

@@ -111,9 +111,11 @@ AI 在执行以下任一操作时，应**自动触发**本 Skill：
 
 - Report pushed directly to human (code review comment / IM / inline display)
 - Wait for human feedback:
-  - **Accept / 采纳** → AI proceeds with changes (see [Post-Guard Follow-up Protocol](#post-guard-follow-up-protocol--拦截后闭环追问) and [Auto-Fix](#auto-fix-impacted-consumers--引用方批量修复) below)
-  - **Reject / 拒绝** → AI rolls back, records reason
-  - **Revision / 修改建议** → AI adjusts approach based on feedback and re-analyzes
+  - **[1] Accept / 采纳** → AI proceeds with changes (see [Post-Guard Follow-up Protocol](#post-guard-follow-up-protocol--拦截后闭环追问) and [Auto-Fix](#auto-fix-impacted-consumers--引用方批量修复) below)
+  - **[2] Reject / 拒绝** → AI rolls back, records reason
+  - **[3] Revise / 修改建议** → AI adjusts approach based on feedback and re-analyzes
+
+> **i18n**: All three options support auto-detection via `scripts/lang.py` `Translator._detect_lang()` which checks system locale or `LANG` env var. Present options in the detected language ONLY — never show both languages. No extra user action needed.
 
 ---
 
@@ -137,9 +139,13 @@ AI 在执行以下任一操作时，应**自动触发**本 Skill：
 Risk level: High / Medium / Low
 
 ### Decision / 决策
-- [ ] Accept / 采纳
-- [ ] Reject / 拒绝
-- [ ] Revision / 修改建议
+_Options auto-translated — shown in detected language only (system locale or LANG env var). Example below is English; the actual output matches the user's system language._
+
+> Reply with number:
+
+- **[1] Accept** — proceed, auto-fix all impacted consumers
+- **[2] Reject** — rollback change
+- **[3] Revise** — adjust approach
 ```
 
 ### Risk Levels / 风险等级
@@ -235,15 +241,25 @@ Example:
 
 #### Step 2: Ask for Decision / 追问决策
 
-Present three options clearly:
+Present three options clearly. Use the detected language (check `LANG` env var or conversation language). Show ONLY one language:
 
 ```
 How would you like to proceed?
 
-1. **Accept** — proceed with change, I'll auto-apply compatibility mitigations
-   (@Deprecated, route retention, fallback, calling-site updates)
-2. **Reject** — roll back the change, no action taken
-3. **Revise** — adjust approach (tell me what to change)
+[1] **Accept** — proceed, I'll auto-apply compatibility mitigations
+    (@Deprecated, route retention, fallback, calling-site updates)
+[2] **Reject** — roll back the change, no action taken
+[3] **Revise** — adjust approach (tell me what to change)
+```
+
+If the conversation is in Chinese, present in Chinese:
+
+```
+请选择处理方式：
+
+[1] **采纳** — 继续执行，自动修复所有受影响引用方
+[2] **拒绝** — 回滚变更，不做任何修改
+[3] **修改建议** — 调整方案（告诉我怎么改）
 ```
 
 Wait for user input — do **not** proceed without a decision.
@@ -254,11 +270,11 @@ Based on user's choice:
 
 | Decision / 决策 | AI Action / AI 操作 |
 |----------------|-------------------|
-| **Accept** ✅ | 1. Apply compatibility mitigations (auto-add `@Deprecated`, retain old routes/methods with @Deprecated + delegate, add fallback logic for removed fields). 2. Re-run analysis pipeline to verify no P0 remains. 3. If clean → user can commit again. |
-| **Reject** ❌ | 1. `git checkout -- .` to discard changes. 2. Confirm rollback complete. |
-| **Revise** ✏️ | 1. Listen to user's revision guidance. 2. Adjust code accordingly. 3. Re-run analysis pipeline. 4. Present updated report. |
+| **→ 1** ✅ | 1. Apply compatibility mitigations (auto-add `@Deprecated`, retain old routes/methods with @Deprecated + delegate, add fallback logic for removed fields). 2. Re-run analysis pipeline to verify no P0 remains. 3. If clean → user can commit again. |
+| **→ 2** ❌ | 1. `git checkout -- .` to discard changes. 2. Confirm rollback complete. |
+| **→ 3** ✏️ | 1. Listen to user's revision guidance. 2. Adjust code accordingly. 3. Re-run analysis pipeline. 4. Present updated report. |
 
-**Important**: The AI should autonomously execute these actions — no additional user instruction needed. If the user says "Accept", the AI should immediately start applying mitigations.
+**Important**: The AI should autonomously execute these actions — no additional user instruction needed. If the user says "1" or "Accept", the AI should immediately start applying mitigations.
 
 #### Step 4: Verify / 验证
 
@@ -297,7 +313,7 @@ After the user accepts a change (whether via the Post-Guard protocol or in norma
 
 #### Step 1: Collect Consumer Sites / 收集引用点
 
-After user says "Accept" / "采纳":
+After user says "1" / "Accept" / "采纳" — or after the user chooses the Accept option in any language:
 
 1. Read the impact analysis report or re-run `impact_mapper.py`
 2. Extract the complete list of impacted consumer sites (file + line + symbol)

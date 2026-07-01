@@ -112,11 +112,7 @@ def get_changed_files(target: str = "HEAD") -> list[tuple[str, str]]:
             files.append((status, parts[1]))
     return files
 
-# Three separate patterns replacing one monolithic regex:
-#   Pattern 1: class/interface/enum declarations with modifiers
-#   Pattern 2: method declarations WITH modifiers (public String getName() { ... })
-#   Pattern 3: method declarations WITHOUT modifiers (String getName(); — interface/Feign)
-# Split approach avoids catastrophic backtracking from nested quantifiers.
+# Separate patterns for class/method declarations to avoid backtracking issues.
 _JAVA_CLASS_PATTERN = re.compile(
     r'^\s*(?:public|private|protected|static|final|abstract|synchronized|default)\s+.*'
     r'(class|interface|enum|@interface)\s+\w+'
@@ -465,8 +461,8 @@ def extract_vue_diff(diff_text: str) -> tuple[list[str], str]:
         if not line:
             continue
         prefix = line[0]
-        # Section tracking must check ALL lines (context + diff),
-        # but symbol extraction only from +/- lines.
+        # Track <script>/<template> sections across context + diff lines,
+        # extract symbols only from +/- lines.
         stripped = line[1:].strip() if prefix in ("+", "-", " ") else line.strip()
 
         if _VUE_SCRIPT_RE.match(stripped):

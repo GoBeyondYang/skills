@@ -211,7 +211,7 @@ def _type_icon(change_type: str) -> str:
     }.get(change_type, "⚪ ")
 
 def generate_report(manifest: dict, matrix: dict, translator: Optional[Translator] = None) -> str:
-    """Assemble a complete bilingual business impact report.
+    """Assemble a language-aware business impact report.
 
     Args:
         manifest: Diff manifest dict.
@@ -361,9 +361,9 @@ def generate_report(manifest: dict, matrix: dict, translator: Optional[Translato
 
 > {t.t('report.decision.instruction')}
 
-- [ ] **{t.t('report.decision.accept')}**
-- [ ] **{t.t('report.decision.reject')}**
-- [ ] **{t.t('report.decision.modify')}**
+- **{t.t('report.decision.accept')}**
+- **{t.t('report.decision.reject')}**
+- **{t.t('report.decision.modify')}**
 
 ---
 

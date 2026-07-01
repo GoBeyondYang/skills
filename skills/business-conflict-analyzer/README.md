@@ -127,9 +127,19 @@ $ git commit -m "用户信息升级"
 
 #### Decision & Auto-Fix / 决策与自动修复
 
-The user reviews the report and says **"Accept"** → AI immediately auto-fixes all consumers.
+The user gets 3 options, replies with a number → AI executes:
 
-用户查看报告后说 **"采纳"** → AI 立即自动修复所有受影响引用方。
+```
+How would you like to proceed?
+
+[1] **Accept** — proceed, auto-fix all impacted consumers
+[2] **Reject** — roll back the change, no action taken
+[3] **Revise** — adjust approach (tell me what to change)
+```
+
+_System locale auto-detected — if Chinese, shows in Chinese._ / _自动识别系统语言，中文环境显示中文。_
+
+If the user says **"1"** → AI immediately auto-fixes all consumers. / 用户说 **"1"** → AI 立即自动修复所有受影响引用方。
 
 ![Decision & Auto-Fix](docs/决策执行与自动修复闭环.png)
 *Decision loop: Accept → auto-fix → verify. / 决策闭环：采纳 → 自动修复 → 编译验证。*
