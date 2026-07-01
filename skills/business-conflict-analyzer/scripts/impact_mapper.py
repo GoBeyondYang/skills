@@ -160,7 +160,18 @@ _INCLUDE_EXTS = {
     ".properties", ".conf",
     ".xml",
 }
-_EXCLUDE_DIRS = {".git", "node_modules", "target", "build", "__pycache__", ".venv"}
+_EXCLUDE_DIRS = {
+    ".git", "node_modules", "target", "build", "__pycache__", ".venv",
+    "dist", ".next", ".nuxt", "out", "generated", "gen",
+    ".m2", "gradle", ".gradle",
+    ".idea", ".settings", ".vscode", ".vs",
+    "assets", "public", "static", "uploads",
+    "coverage", ".nyc_output",
+    "helm", "charts", "vendor",
+}
+
+_REF_CACHE: dict[tuple[str, str], list[str]] = {}
+_MAX_REFS = 100
 
 def _build_regex(symbol: str) -> str:
     """Build a combined regex for finding references to `symbol`."""
@@ -178,7 +189,7 @@ def _build_regex(symbol: str) -> str:
         ])
     return '|'.join(patterns)
 
-def _find_references_grep(regex: str, exclude_file: str, project_root: str) -> list[str]:
+def _find_references_grep(regex: str, project_root: str) -> list[str]:
     """Fast path: use system grep (works on Linux/macOS/Git Bash)."""
     result = subprocess.run(
         ["grep", "-r", "-E",
@@ -192,25 +203,21 @@ def _find_references_grep(regex: str, exclude_file: str, project_root: str) -> l
          "--include=*.xml",
          "--exclude-dir=.git", "--exclude-dir=node_modules",
          "--exclude-dir=target", "--exclude-dir=build",
+         "--exclude-dir=dist", "--exclude-dir=.next", "--exclude-dir=out",
+         "--exclude-dir=generated", "--exclude-dir=.gradle",
+         "--exclude-dir=.idea", "--exclude-dir=.vscode",
          "-l", regex, project_root],
         capture_output=True, text=True, timeout=30,
         encoding="utf-8", errors="replace"
     )
-    refs = []
-    for path in result.stdout.strip().splitlines():
-        path = path.strip()
-        if path and (not exclude_file or exclude_file not in path):
-            refs.append(path)
-    return refs
+    return [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
 
-def _find_references_python(regex: str, exclude_file: str, project_root: str) -> list[str]:
-    """Slow fallback: pure Python file search (works everywhere, including Windows cmd/PowerShell)."""
+def _find_references_python(regex: str, project_root: str) -> list[str]:
+    """Pure Python file search (works everywhere, including Windows cmd/PowerShell)."""
     refs = []
     root = Path(project_root).resolve()
     compiled = re.compile(regex)
-    # Walk files, skipping excluded dirs
     for dirpath, dirnames, filenames in os.walk(root):
-        # Prune excluded dirs in-place (os.walk respects this)
         dirnames[:] = [d for d in dirnames if d not in _EXCLUDE_DIRS]
         for fn in filenames:
             ext = Path(fn).suffix.lower()
@@ -218,8 +225,6 @@ def _find_references_python(regex: str, exclude_file: str, project_root: str) ->
                 continue
             fpath = Path(dirpath) / fn
             rel = str(fpath.relative_to(root)).replace("\\", "/")
-            if exclude_file and exclude_file in rel:
-                continue
             try:
                 with fpath.open("r", encoding="utf-8", errors="replace") as f:
                     for line in f:
@@ -228,24 +233,31 @@ def _find_references_python(regex: str, exclude_file: str, project_root: str) ->
                             break
             except (OSError, UnicodeDecodeError):
                 continue
+            if len(refs) >= _MAX_REFS:
+                return refs
     return refs
 
 
 def find_references(symbol: str, exclude_file: str = "", project_root: str = ".") -> list[str]:
-    """Search for symbol references in the project.
+    """Search for symbol references in the project with caching.
 
     Tries system grep first (fast), falls back to pure Python (slow but portable).
+    Results are cached per (symbol, project_root) to avoid redundant searches.
     """
-    regex = _build_regex(symbol)
-    # Fast path: try grep
-    try:
-        return _find_references_grep(regex, exclude_file, project_root)
-    except FileNotFoundError:
-        pass  # grep not available on this system
-    except subprocess.TimeoutExpired:
-        pass
-    # Fallback: pure Python
-    return _find_references_python(regex, exclude_file, project_root)
+    cache_key = (symbol, project_root)
+    if cache_key not in _REF_CACHE:
+        regex = _build_regex(symbol)
+        try:
+            _REF_CACHE[cache_key] = _find_references_grep(regex, project_root)
+        except FileNotFoundError:
+            _REF_CACHE[cache_key] = _find_references_python(regex, project_root)
+        except subprocess.TimeoutExpired:
+            _REF_CACHE[cache_key] = _find_references_python(regex, project_root)
+
+    refs = _REF_CACHE[cache_key]
+    if exclude_file:
+        return [p for p in refs if exclude_file not in p]
+    return list(refs)
 
 def find_historical_relations(symbol: str, project_root: str = ".") -> list[str]:
     
@@ -461,14 +473,19 @@ def map_impact(manifest: dict, translator: Optional[Translator] = None) -> Impac
         refs = []
         hist_refs = set()
         if risk_level in ("P0", "P1") and status != "A":
+            seen_syms = set()
+            unique_syms = []
             for sym in symbols:
-                sym_name = _extract_symbol_name(sym)
-                if len(sym_name) > 2 and not sym_name.startswith(("@", "//", "/*")):
-                    found = find_references(sym_name, exclude_file=filepath)
-                    refs.extend(found)
-                    if risk_level == "P0" and found:
-                        hist = find_historical_relations(sym_name)
-                        hist_refs.update(hist)
+                name = _extract_symbol_name(sym)
+                if len(name) > 2 and not name.startswith(("@", "//", "/*")) and name not in seen_syms:
+                    seen_syms.add(name)
+                    unique_syms.append(name)
+            for sym_name in unique_syms:
+                found = find_references(sym_name, exclude_file=filepath)
+                refs.extend(found)
+                if risk_level == "P0" and found:
+                    hist = find_historical_relations(sym_name)
+                    hist_refs.update(hist)
 
         # Build translated detail
         detail_parts = [layer_display]

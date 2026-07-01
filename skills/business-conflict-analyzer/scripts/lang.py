@@ -423,10 +423,16 @@ class Translator:
             if env.startswith("en"):
                 return "en"
         # Fallback to system locale
+        # Linux/Mac: locale is "zh_CN.UTF-8" → startswith("zh") works
+        # Windows:   locale is "Chinese (Simplified)_China" → need "Chinese" in lc
         try:
             lc = locale.getlocale()[0]
-            if lc and lc.startswith("zh"):
-                return "zh"
+            if lc:
+                lc_lower = lc.lower().replace("-", "_")
+                if lc_lower.startswith("zh") or "chinese" in lc_lower:
+                    return "zh"
+                if lc_lower.startswith("en") or "english" in lc_lower:
+                    return "en"
         except Exception:
             pass
         return "en"
