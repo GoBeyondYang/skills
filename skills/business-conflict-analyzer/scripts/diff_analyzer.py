@@ -48,15 +48,39 @@ class DiffManifest:
     summary_key: str = "diff.summary.no_changes"
     summary_params: dict = field(default_factory=dict)
 
+def _detect_encoding() -> str:
+    """Detect the system encoding for subprocess output on Windows."""
+    import locale
+    try:
+        return locale.getpreferredencoding(do_setlocale=False) or "utf-8"
+    except Exception:
+        return "utf-8"
+
 def run_git_diff(*args: str) -> str:
     """Run git diff with given args and return stdout. Exits on error."""
     cmd = ["git", "diff"] + list(args)
     try:
+        # Try UTF-8 first (works on Linux/macOS/Git Bash)
         result = subprocess.run(
             cmd, capture_output=True, text=True,
             encoding="utf-8", errors="replace"
         )
-        return result.stdout
+        output = result.stdout
+
+        # On Windows with Chinese locale, git output may use GBK.
+        # Check if replacement chars indicate an encoding mismatch.
+        if "�" in output or "?" in output:
+            sys_enc = _detect_encoding()
+            if sys_enc.lower() != "utf-8":
+                result2 = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    encoding=sys_enc, errors="replace"
+                )
+                output2 = result2.stdout
+                # Use the re-decoded output if it has fewer replacement chars
+                if output2.count("�") + output2.count("?") < output.count("�") + output.count("?"):
+                    return output2
+        return output
     except FileNotFoundError:
         t = Translator()
         print(t.t("error.git_diff_failed", stderr="git not found in PATH"), file=sys.stderr)

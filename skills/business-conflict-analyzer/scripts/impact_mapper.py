@@ -149,48 +149,103 @@ def identify_layer(filepath: str) -> tuple[str, str]:
         return ".jsp", "layer.frontend_page"
     return "other", "layer.other"
 
-def find_references(symbol: str, exclude_file: str = "", project_root: str = ".") -> list[str]:
+# File extension sets for grep include / Python walk
+_INCLUDE_EXTS = {
+    ".java", ".kt", ".kts",
+    ".ts", ".tsx", ".vue",
+    ".js", ".jsx",
+    ".py", ".pyi", ".go",
+    ".jsp", ".jspf", ".tag",
+    ".yml", ".yaml",
+    ".properties", ".conf",
+    ".xml",
+}
+_EXCLUDE_DIRS = {".git", "node_modules", "target", "build", "__pycache__", ".venv"}
 
+def _build_regex(symbol: str) -> str:
+    """Build a combined regex for finding references to `symbol`."""
+    esc = re.escape(symbol)
+    if symbol.startswith("@"):
+        patterns = [esc]
+    else:
+        patterns = [rf'\b{esc}\b']
+    if not symbol.startswith("@") and symbol and symbol[0].islower():
+        cap = symbol[0].upper() + symbol[1:]
+        patterns.extend([
+            rf'\bget{cap}\b',
+            rf'\bset{cap}\b',
+            rf'\.{esc}\b',
+        ])
+    return '|'.join(patterns)
+
+def _find_references_grep(regex: str, exclude_file: str, project_root: str) -> list[str]:
+    """Fast path: use system grep (works on Linux/macOS/Git Bash)."""
+    result = subprocess.run(
+        ["grep", "-r", "-E",
+         "--include=*.java", "--include=*.kt", "--include=*.kts",
+         "--include=*.ts", "--include=*.tsx", "--include=*.vue",
+         "--include=*.js", "--include=*.jsx",
+         "--include=*.py", "--include=*.pyi", "--include=*.go",
+         "--include=*.jsp", "--include=*.jspf", "--include=*.tag",
+         "--include=*.yml", "--include=*.yaml",
+         "--include=*.properties", "--include=*.conf",
+         "--include=*.xml",
+         "--exclude-dir=.git", "--exclude-dir=node_modules",
+         "--exclude-dir=target", "--exclude-dir=build",
+         "-l", regex, project_root],
+        capture_output=True, text=True, timeout=30,
+        encoding="utf-8", errors="replace"
+    )
     refs = []
-    try:
-        esc = re.escape(symbol)
-        # For @-prefixed symbols (annotations), grep -E doesn't support
-        # lookarounds and \b before @ fails. Search for the literal pattern.
-        if symbol.startswith("@"):
-            patterns = [esc]
-        else:
-            patterns = [rf'\b{esc}\b']
-        if not symbol.startswith("@") and symbol and symbol[0].islower():
-            cap = symbol[0].upper() + symbol[1:]
-            patterns.extend([
-                rf'\bget{cap}\b',
-                rf'\bset{cap}\b',
-                rf'\.{esc}\b',
-            ])
-        regex = '|'.join(patterns)
-        result = subprocess.run(
-            ["grep", "-r", "-E",
-             "--include=*.java", "--include=*.kt", "--include=*.kts",
-             "--include=*.ts", "--include=*.tsx", "--include=*.vue",
-             "--include=*.js", "--include=*.jsx",
-             "--include=*.py", "--include=*.pyi", "--include=*.go",
-             "--include=*.jsp", "--include=*.jspf", "--include=*.tag",
-             "--include=*.yml", "--include=*.yaml",
-             "--include=*.properties", "--include=*.conf",
-             "--include=*.xml",
-             "--exclude-dir=.git", "--exclude-dir=node_modules",
-             "--exclude-dir=target", "--exclude-dir=build",
-             "-l", regex, project_root],
-            capture_output=True, text=True, timeout=30,
-            encoding="utf-8", errors="replace"
-        )
-        for path in result.stdout.strip().splitlines():
-            path = path.strip()
-            if path and (not exclude_file or exclude_file not in path):
-                refs.append(path)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+    for path in result.stdout.strip().splitlines():
+        path = path.strip()
+        if path and (not exclude_file or exclude_file not in path):
+            refs.append(path)
     return refs
+
+def _find_references_python(regex: str, exclude_file: str, project_root: str) -> list[str]:
+    """Slow fallback: pure Python file search (works everywhere, including Windows cmd/PowerShell)."""
+    refs = []
+    root = Path(project_root).resolve()
+    compiled = re.compile(regex)
+    # Walk files, skipping excluded dirs
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune excluded dirs in-place (os.walk respects this)
+        dirnames[:] = [d for d in dirnames if d not in _EXCLUDE_DIRS]
+        for fn in filenames:
+            ext = Path(fn).suffix.lower()
+            if ext not in _INCLUDE_EXTS:
+                continue
+            fpath = Path(dirpath) / fn
+            rel = str(fpath.relative_to(root)).replace("\\", "/")
+            if exclude_file and exclude_file in rel:
+                continue
+            try:
+                with fpath.open("r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if compiled.search(line):
+                            refs.append(rel)
+                            break
+            except (OSError, UnicodeDecodeError):
+                continue
+    return refs
+
+
+def find_references(symbol: str, exclude_file: str = "", project_root: str = ".") -> list[str]:
+    """Search for symbol references in the project.
+
+    Tries system grep first (fast), falls back to pure Python (slow but portable).
+    """
+    regex = _build_regex(symbol)
+    # Fast path: try grep
+    try:
+        return _find_references_grep(regex, exclude_file, project_root)
+    except FileNotFoundError:
+        pass  # grep not available on this system
+    except subprocess.TimeoutExpired:
+        pass
+    # Fallback: pure Python
+    return _find_references_python(regex, exclude_file, project_root)
 
 def find_historical_relations(symbol: str, project_root: str = ".") -> list[str]:
     
@@ -252,6 +307,8 @@ def load_common_patterns(pattern_path: str | None = None) -> list[dict]:
             text = line.lstrip("- ").strip() if line.startswith("- ") else line
             if text.startswith("**触发"):
                 current["trigger"] = _extract_pattern_value(text)
+            elif text.startswith("**关键词") or text.startswith("**Key"):
+                current["keywords"] = _extract_pattern_value(text)
             elif text.startswith("**影响范围"):
                 current["scope"] = _extract_pattern_value(text)
             elif text.startswith("**影响等级"):
@@ -286,21 +343,20 @@ def _extract_pattern_value(text: str) -> str:
     return ""
 
 def match_pattern(symbols: list[str], filepath: str) -> Optional[dict]:
-    
+    """Match changes against the common_patterns.md keyword library.
+
+    Each pattern defines a set of space-separated keywords. A pattern matches
+    when at least 2 of its keywords appear in the combined symbol+filepath text.
+    """
     patterns = load_common_patterns()
     text = " ".join(symbols) + " " + filepath.lower()
     for p in patterns:
-        trigger_keywords = p.get("trigger", "")
-        if not trigger_keywords:
+        keywords = p.get("keywords", "")
+        if not keywords:
             continue
-        kws = trigger_keywords.split()
-        # Count keywords that appear in the combined text
+        kws = keywords.split()
         hit_count = sum(1 for kw in kws if len(kw) > 2 and kw in text)
-        # Check if the trigger has language-specific keywords (.vue, .tsx, .jsp, etc.)
-        # that act as domain classifiers — if so, the matched text must also contain one.
-        lang_hints = [kw for kw in kws if kw.startswith(".") and len(kw) > 2]
-        has_lang_match = not lang_hints or any(lh in filepath.lower() for lh in lang_hints)
-        if hit_count >= 2 and has_lang_match:
+        if hit_count >= 2:
             return p
     return None
 
