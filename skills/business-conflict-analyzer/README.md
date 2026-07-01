@@ -101,8 +101,29 @@ $ git commit -m "用户信息升级"
 
 #### Report Preview / 报告预览
 
-- 🔗 [中文示例](docs/sample-report-zh.md) — 完整报告
-- 🔗 [English sample](docs/sample-report-en.md) — Full report
+```
+⚠️ 变更摘要：2 个 P0 破坏性变更
+├── UserDTO.java       删除 mobile + 新增 phone → 影响 6 个下游服务
+├── OrderController.java  API 路径 /api/order → /api/v2/order
+
+🔍 引用分析（多语言跨服务）
+├── Java  PaymentService.java        getMobile() → 编译失败
+├── Go    user_handler.go            user.Mobile → 编译失败
+├── TS    notification.module.ts     userDTO.mobile → 编译失败
+├── Python payment_service.py        user['mobile'] → 运行时异常
+├── Vue   UserProfile.vue            响应字段不匹配
+├── JSP   user-profile.jsp           EL 表达式失效
+└── ...
+
+⚡ 事后自动修复（用户采纳后）
+├── 10 个受影响引用 → 10 个已自动修复 ✅
+├── 编译验证通过（Java / Go / TS / Kotlin）
+└── 0 跳过
+```
+
+完整报告：
+- 🔗 [中文示例](docs/sample-report-zh.md)
+- 🔗 [English sample](docs/sample-report-en.md)
 
 #### Decision & Auto-Fix / 决策与自动修复
 
